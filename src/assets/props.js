@@ -162,9 +162,11 @@ function buildLantern(group) {
   ribMesh.position.y = -0.665;
   g.add(ribMesh);
 
+  // kept dim and small: the paper globe is translucent, so a hot bulb behind
+  // it reads as one blown-out blob once bloom gets hold of it
   const bulb = new THREE.Mesh(
-    new THREE.SphereGeometry(0.030, 14, 10),
-    new THREE.MeshBasicMaterial({ color: 0xfff0d8 }),
+    new THREE.SphereGeometry(0.020, 14, 10),
+    new THREE.MeshBasicMaterial({ color: 0xffcf96 }),
   );
   bulb.position.y = -0.50;
   g.add(bulb);

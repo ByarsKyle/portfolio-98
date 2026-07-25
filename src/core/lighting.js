@@ -44,7 +44,7 @@ export function buildLighting(scene) {
   L.skyFill = skyFill;
 
   // ── paper lantern on the ceiling — the room's key light
-  const lantern = new THREE.PointLight(0xffb765, 9.5, 8.5, 1.9);
+  const lantern = new THREE.PointLight(0xffb765, 7.8, 8.5, 1.9);
   lantern.position.set(-0.45, 2.18, 0.35);
   lantern.castShadow = true;
   lantern.shadow.mapSize.set(1024, 1024);
