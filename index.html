@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Portfolio — 1998</title>
+<meta name="description" content="A cozy bedroom rendered in real time, with a working Windows 98 machine on the desk. Every asset is generated procedurally in code." />
+<meta name="theme-color" content="#120d09" />
+<meta property="og:title" content="Portfolio — 1998" />
+<meta property="og:description" content="A cozy procedurally-generated bedroom in WebGL, with a bootable Windows 98 PC." />
+<meta property="og:type" content="website" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🖥️</text></svg>" />
+<link rel="stylesheet" href="/src/styles.css" />
+</head>
+<body>
+  <canvas id="view"></canvas>
+
+  <!-- boot / loading -->
+  <div id="loader">
+    <div class="loader-inner">
+      <div class="loader-title">PORTFOLIO<span>.98</span></div>
+      <div class="loader-sub" id="loader-task">initialising asset forge…</div>
+      <div class="loader-bar"><i id="loader-fill"></i></div>
+      <div class="loader-log" id="loader-log"></div>
+    </div>
+  </div>
+
+  <!-- title / start card -->
+  <div id="start" hidden>
+    <div class="start-card">
+      <h1>A cozy room, circa 1998</h1>
+      <p>Everything you're about to see — every plank, fold of fabric, wrinkle on the
+         dog — is generated from code at load time. No models, no textures, no downloads.</p>
+      <div class="keys">
+        <span><b>W A S D</b> move</span>
+        <span><b>Mouse</b> look</span>
+        <span><b>Shift</b> run</span>
+        <span><b>E</b> interact</span>
+        <span><b>Esc</b> release cursor</span>
+      </div>
+      <button id="start-btn">Enter the room</button>
+      <div class="start-hint">Sit down at the beige box in the corner. It still boots.</div>
+    </div>
+  </div>
+
+  <!-- in-world HUD -->
+  <div id="hud" hidden>
+    <div id="crosshair"></div>
+    <div id="prompt" hidden><b>E</b><span id="prompt-label">Use</span></div>
+    <div id="hint">WASD move · Shift run · E interact</div>
+  </div>
+
+  <!-- shown once the camera has settled at the monitor -->
+  <div id="crt-exit" hidden>Press <b>Esc</b> to step away from the computer</div>
+
+  <div id="rotate-warning">
+    <p>This room is best explored on a desktop with a keyboard and mouse.</p>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

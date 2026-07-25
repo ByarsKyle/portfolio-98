@@ -1,0 +1,20 @@
+{
+  "name": "portfolio-98",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "A cozy 1998 bedroom rendered in WebGL, with a bootable Windows 98 machine. Every asset is generated procedurally at load time.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4173"
+  },
+  "dependencies": {
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "puppeteer": "^25.3.0",
+    "vite": "^8.1.5",
+    "yauzl": "^3.4.0"
+  }
+}
