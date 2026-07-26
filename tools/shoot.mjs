@@ -23,7 +23,12 @@ const VIEWS = [
   { name: '11-wide',       args: [1.85, 1.585, 2.15, 0.62, -0.10] },
 ];
 
-const server = await createServer({ root: process.cwd(), server: { port: 5199, strictPort: false } });
+// hmr/watch off: an edit landing mid-run reloads the page and blows away
+// window.__room half way through the shot list.
+const server = await createServer({
+  root: process.cwd(),
+  server: { port: 5199, strictPort: false, hmr: false, watch: null },
+});
 await server.listen();
 const url = server.resolvedUrls.local[0];
 console.log('serving', url);

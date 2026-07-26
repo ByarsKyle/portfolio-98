@@ -9,12 +9,13 @@
 // ─────────────────────────────────────────────────────────────
 import * as THREE from 'three';
 import { DESK } from '../assets/furniture.js';
+import { CRTShader } from '../assets/desktop.js';
 
 const el = (id) => document.getElementById(id);
 const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
 export class Interaction {
-  constructor({ scene, camera, player, desktop, lights, grade, audio, bloom, pug, props }) {
+  constructor({ scene, camera, player, desktop, lights, grade, audio, bloom, pug, props, renderPass, renderer }) {
     this.scene = scene;
     this.camera = camera;
     this.player = player;
@@ -25,6 +26,8 @@ export class Interaction {
     this.audio = audio;
     this.bloom = bloom;
     this.pug = pug;
+    this.renderPass = renderPass;
+    this.renderer = renderer;
 
     this.mode = 'walk';           // walk | toCRT | inCRT | fromCRT | toBed | inBed | fromBed
     this.blend = 0;
@@ -42,12 +45,125 @@ export class Interaction {
     this.prompt = el('prompt');
     this.promptLabel = el('prompt-label');
     this.exitHint = el('crt-exit');
+    this.fsButton = el('crt-fullscreen');
+
+    this.fullscreen = false;
+    this.fs = null;               // built lazily the first time you go fullscreen
 
     this._buildTargets();
     this._bindInput();
   }
 
   get inCRT() { return this.mode === 'inCRT' || this.mode === 'toCRT'; }
+
+  // ── fullscreen ─────────────────────────────────────────────
+  // Not an overlay either: the same OS canvas goes through the same CRT
+  // shader, just on a flat quad with the barrel distortion turned off
+  // (uWarp = 0) instead of on the curved tube. The composer is pointed at
+  // this stage, so bloom and the film grade still apply.
+  _buildFullscreenStage() {
+    const material = new THREE.ShaderMaterial({
+      uniforms: THREE.UniformsUtils.clone(CRTShader.uniforms),
+      vertexShader: CRTShader.vertexShader,
+      fragmentShader: CRTShader.fragmentShader,
+      toneMapped: true,
+    });
+    const u = material.uniforms;
+    u.uMap.value = this.os.texture;
+    u.uWarp.value = 0;          // flat panel, no tube geometry to match
+    // At 5x the size the tube artefacts have to come down or 8px Tahoma
+    // mushes, and the phosphor glow has to come right down or a white
+    // Explorer window sums past 1.0 and blows out.
+    u.uScan.value = 0.16;
+    u.uGrille.value = 0.10;
+    u.uGlow.value = 0.10;
+    u.uBright.value = 1.0;
+    u.uFlicker.value = 0.006;
+    u.uCurve.value = 0.0;
+
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material);
+    const stage = new THREE.Scene();
+    stage.background = new THREE.Color(0x000000);
+    stage.add(quad);
+
+    const cam = new THREE.OrthographicCamera(-0.5, 0.5, 0.5, -0.5, 0, 10);
+    cam.position.z = 1;
+
+    this.fs = { stage, cam, quad, material };
+    this._layoutFullscreen();
+  }
+
+  /** Letterbox the 4:3 canvas into whatever shape the window happens to be. */
+  _layoutFullscreen() {
+    if (!this.fs) return;
+    const aspect = innerWidth / innerHeight;
+    const cam = this.fs.cam;
+    cam.left = -aspect / 2; cam.right = aspect / 2;
+    cam.top = 0.5; cam.bottom = -0.5;
+    cam.updateProjectionMatrix();
+
+    const MARGIN = 0.97;
+    let h = MARGIN, w = h * (4 / 3);
+    if (w > aspect * MARGIN) { w = aspect * MARGIN; h = w * (3 / 4); }
+    this.fs.quad.scale.set(w, h, 1);
+  }
+
+  toggleFullscreen(on = !this.fullscreen) {
+    if (this.mode !== 'inCRT') return;
+    if (on === this.fullscreen) return;
+    if (!this.fs) this._buildFullscreenStage();
+    this.fullscreen = on;
+
+    if (on) {
+      this._layoutFullscreen();
+      this._saved = {
+        bloom: this.bloom.strength,
+        vignette: this.grade.uniforms.uVignette.value,
+        aberration: this.grade.uniforms.uAberration.value,
+        grain: this.grade.uniforms.uGrain.value,
+        toneMapping: this.renderer.toneMapping,
+      };
+      // The room's look is a filmic grade of a dim bedroom. Applied to a whole
+      // screen of white Win98 chrome it eats the contrast and 11px Tahoma stops
+      // being readable — ACES in particular turns #ffffff into wet grey. Drop
+      // the tone curve entirely while the desktop is the whole frame: the OS
+      // canvas is already sRGB, so straight through is exactly right.
+      this.renderer.toneMapping = THREE.NoToneMapping;
+      this.bloom.strength = 0.05;
+      this.grade.uniforms.uVignette.value = 0.34;
+      this.grade.uniforms.uAberration.value = 0.0004;
+      this.grade.uniforms.uGrain.value = 0.010;
+      this.renderPass.scene = this.fs.stage;
+      this.renderPass.camera = this.fs.cam;
+    } else {
+      this.renderPass.scene = this.scene;
+      this.renderPass.camera = this.camera;
+      if (this._saved) {
+        this.renderer.toneMapping = this._saved.toneMapping;
+        this.bloom.strength = this._saved.bloom;
+        this.grade.uniforms.uVignette.value = this._saved.vignette;
+        this.grade.uniforms.uAberration.value = this._saved.aberration;
+        this.grade.uniforms.uGrain.value = this._saved.grain;
+      }
+    }
+    this._syncFullscreenUI();
+    this.audio.play('click');
+  }
+
+  _syncFullscreenUI() {
+    const b = this.fsButton;
+    if (!b) return;
+    const seated = this.mode === 'inCRT';
+    b.hidden = !seated;
+    if (!seated) return;
+    b.classList.toggle('on', this.fullscreen);
+    b.querySelector('span').textContent = this.fullscreen ? 'Exit Full Screen' : 'Full Screen';
+    if (this.exitHint) {
+      this.exitHint.innerHTML = this.fullscreen
+        ? 'Press <b>Esc</b> to leave full screen'
+        : 'Press <b>Esc</b> to step away from the computer';
+    }
+  }
 
   _buildTargets() {
     const v = (x, y, z) => new THREE.Vector3(x, y, z);
@@ -96,7 +212,15 @@ export class Interaction {
         }
         if (this.mode === 'inCRT' || this.mode === 'inBed') { this._exit(); return; }
       }
+      // Alt+Enter — the same thing it did to a DOS box in 1998
+      if (e.code === 'Enter' && e.altKey && this.mode === 'inCRT') {
+        this.toggleFullscreen();
+        e.preventDefault();
+        return;
+      }
       if (e.code === 'Escape') {
+        // back out one layer at a time: full screen, then the chair
+        if (this.fullscreen) { this.toggleFullscreen(false); e.preventDefault(); return; }
         if (this.mode === 'inCRT' || this.mode === 'inBed') { this._exit(); e.preventDefault(); }
         return;
       }
@@ -137,11 +261,25 @@ export class Interaction {
     };
     this._onCtx = (e) => { if (this.mode === 'inCRT') e.preventDefault(); };
 
+    this._onResize = () => this._layoutFullscreen();
+
     addEventListener('mousemove', this._onMove);
     addEventListener('mousedown', this._onDown);
     addEventListener('mouseup', this._onUp);
     addEventListener('wheel', this._onWheel, { passive: false });
     addEventListener('contextmenu', this._onCtx);
+    addEventListener('resize', this._onResize);
+
+    if (this.fsButton) {
+      this.fsButton.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.audio.resume();
+        this.toggleFullscreen();
+      });
+      // the button lives over the screen; don't let its clicks reach the OS
+      this.fsButton.addEventListener('mousedown', (e) => e.stopPropagation());
+      this.fsButton.addEventListener('mouseup', (e) => e.stopPropagation());
+    }
 
     // the OS asks us for sounds
     this.os.state.sound = (name, opts) => this.audio.play(name, opts);
@@ -150,8 +288,12 @@ export class Interaction {
   }
 
   _screenUV() {
-    this.raycaster.setFromCamera(this.pointerNDC, this.camera);
-    const hit = this.raycaster.intersectObject(this.screenMesh, false)[0];
+    // same routine either way — pick whichever surface is currently showing
+    const flat = this.fullscreen && this.fs;
+    const cam = flat ? this.fs.cam : this.camera;
+    const mesh = flat ? this.fs.quad : this.screenMesh;
+    this.raycaster.setFromCamera(this.pointerNDC, cam);
+    const hit = this.raycaster.intersectObject(mesh, false)[0];
     if (!hit || !hit.uv) return null;
     return { x: hit.uv.x * 640, y: (1 - hit.uv.y) * 480 };
   }
@@ -208,6 +350,8 @@ export class Interaction {
   }
 
   _exit() {
+    // standing up always drops out of full screen first
+    if (this.fullscreen) this.toggleFullscreen(false);
     // return to wherever the body is standing
     const p = this.player;
     const pos = new THREE.Vector3(p.pos.x, 1.585, p.pos.z);
@@ -224,6 +368,7 @@ export class Interaction {
     this.mode = this.mode === 'inCRT' ? 'fromCRT' : 'fromBed';
     document.body.style.cursor = '';
     this.exitHint?.classList.add('gone');
+    this._syncFullscreenUI();
     this.audio.play('click');
   }
 
@@ -278,6 +423,8 @@ export class Interaction {
       new THREE.Vector3(DESK.x - 0.30, DESK.h + 0.2, DESK.z - 0.10));
     this.audio.setCRTProximity(Math.max(0, Math.min(1, 1 - (d - 0.4) / 1.6)));
 
+    if (this.fs) this.fs.material.uniforms.uTime.value = t;
+
     if (this.mode === 'walk') {
       this._updatePrompt();
       return;
@@ -296,6 +443,7 @@ export class Interaction {
         this.mode = 'inCRT';
         this.exitHint?.classList.remove('gone');
         if (this.exitHint) this.exitHint.hidden = false;
+        this._syncFullscreenUI();
         setTimeout(() => this.exitHint?.classList.add('gone'), 6000);
       } else if (this.mode === 'toBed') {
         this.mode = 'inBed';
@@ -344,5 +492,6 @@ export class Interaction {
     removeEventListener('mouseup', this._onUp);
     removeEventListener('wheel', this._onWheel);
     removeEventListener('contextmenu', this._onCtx);
+    removeEventListener('resize', this._onResize);
   }
 }

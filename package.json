@@ -10,6 +10,9 @@
     "preview": "vite preview --port 4173"
   },
   "dependencies": {
+    "@clerk/clerk-js": "^6.25.8",
+    "convex": "^1.42.3",
+    "node-html-parser": "^9.0.0",
     "three": "^0.185.1"
   },
   "devDependencies": {

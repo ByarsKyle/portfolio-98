@@ -33,7 +33,7 @@ function progress(p, label) {
 }
 
 const canvas = el('view');
-const { renderer, scene, camera, composer, bloom, grade } = createEngine(canvas);
+const { renderer, scene, camera, composer, bloom, grade, renderPass } = createEngine(canvas);
 
 async function boot() {
   const t0 = performance.now();
@@ -98,7 +98,7 @@ async function boot() {
 
   const audio = new Audio();
   const interaction = new Interaction({
-    scene, camera, player, desktop, lights, grade, audio, bloom, pug, props,
+    scene, camera, player, desktop, lights, grade, audio, bloom, pug, props, renderPass, renderer,
   });
 
   player.onStep = (running) => audio.footstep(running);

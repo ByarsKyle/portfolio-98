@@ -264,22 +264,40 @@ function buildMonitor(group, os) {
   glass.scale.set(1.005, 1.005, 1);
   hous.add(glass);
 
-  // ── funnel: bezel cross-section tapering back to the neck
+  // ── funnel: bezel cross-section tapering back to the neck.
+  // The loft rings, kept out here because the vents have to know where the
+  // shell actually is at a given depth.
+  const STEPS = [
+    [BW * 0.5, BH * 0.5, BD / 2 - 0.075],
+    [BW * 0.47, BH * 0.47, BD / 2 - 0.13],
+    [BW * 0.40, BH * 0.40, BD / 2 - 0.21],
+    [BW * 0.29, BH * 0.30, BD / 2 - 0.30],
+    [BW * 0.19, BH * 0.20, BD / 2 - 0.365],
+    [BW * 0.13, BH * 0.135, BD / 2 - 0.40],
+  ];
+
+  /** Half-width, half-height and roof slope of the housing at depth z. */
+  const funnelAt = (z) => {
+    if (z >= STEPS[0][2]) return { hw: STEPS[0][0], hh: STEPS[0][1], slope: 0 };
+    for (let i = 0; i < STEPS.length - 1; i++) {
+      const [w0, h0, z0] = STEPS[i];
+      const [w1, h1, z1] = STEPS[i + 1];
+      if (z <= z0 && z >= z1) {
+        const t = (z - z0) / (z1 - z0);
+        return { hw: w0 + (w1 - w0) * t, hh: h0 + (h1 - h0) * t, slope: (h0 - h1) / (z0 - z1) };
+      }
+    }
+    const last = STEPS[STEPS.length - 1];
+    return { hw: last[0], hh: last[1], slope: 0 };
+  };
+
   const funnel = new THREE.Group();
   hous.add(funnel);
   {
-    const steps = [
-      [BW * 0.5, BH * 0.5, BD / 2 - 0.075],
-      [BW * 0.47, BH * 0.47, BD / 2 - 0.13],
-      [BW * 0.40, BH * 0.40, BD / 2 - 0.21],
-      [BW * 0.29, BH * 0.30, BD / 2 - 0.30],
-      [BW * 0.19, BH * 0.20, BD / 2 - 0.365],
-      [BW * 0.13, BH * 0.135, BD / 2 - 0.40],
-    ];
     const parts = [];
-    for (let i = 0; i < steps.length - 1; i++) {
-      const [w0, h0, z0] = steps[i];
-      const [w1, h1, z1] = steps[i + 1];
+    for (let i = 0; i < STEPS.length - 1; i++) {
+      const [w0, h0, z0] = STEPS[i];
+      const [w1, h1, z1] = STEPS[i + 1];
       // build a lofted quad band around the rounded rect
       const ptsA = roundRectPts(w0 * 2, h0 * 2, Math.min(w0, h0) * 0.34, 5);
       const ptsB = roundRectPts(w1 * 2, h1 * 2, Math.min(w1, h1) * 0.34, 5);
@@ -292,7 +310,10 @@ function buildMonitor(group, os) {
       for (let k = 0; k < n; k++) {
         const a = k * 2, b = a + 1;
         const c = ((k + 1) % n) * 2, d = c + 1;
-        idx.push(a, b, c, c, b, d);
+        // roundRectPts winds counter-clockwise and the rings run front-to-back,
+        // so (a,b,c) faces *into* the tube. Backface culling then removes the
+        // outside of the housing and you can see straight through the sides.
+        idx.push(a, c, b, c, d, b);
       }
       const bg = new THREE.BufferGeometry();
       bg.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
@@ -319,15 +340,32 @@ function buildMonitor(group, os) {
     funnel.add(neck);
   }
 
-  // ── top vents
-  const vents = ventStrip(BW - 0.10, 0.10, 13, 0.010);
-  const ventMesh = new THREE.Mesh(vents, new THREE.MeshStandardMaterial({ color: 0x1a1815, roughness: 0.95 }));
-  ventMesh.position.set(0, BH / 2 - 0.004, BD / 2 - 0.20);
-  hous.add(ventMesh);
-  const ventsBack = ventStrip(BW * 0.5, 0.08, 9, 0.009);
-  const vb = new THREE.Mesh(ventsBack, ventMesh.material);
-  vb.position.set(0, BH * 0.34, BD / 2 - 0.33);
-  hous.add(vb);
+  // ── vents: slots cut along the roof of the housing. Each one is placed and
+  // tilted to sit on the tapering shell — a flat strip at bezel height leaves a
+  // row of black bars hanging in mid-air over the back of the tube.
+  const ventM = new THREE.MeshStandardMaterial({ color: 0x1a1815, roughness: 0.95 });
+  {
+    const parts = [];
+    const COUNT = 13;
+    for (let i = 0; i < COUNT; i++) {
+      const z = BD / 2 - 0.085 - i * 0.018;
+      const { hw, hh, slope } = funnelAt(z);
+      // barely proud of the shell — enough to read as a cut slot, not a fin
+      const g = new THREE.BoxGeometry(hw * 1.22, 0.004, 0.0085);
+      g.rotateX(-Math.atan(slope));
+      g.translate(0, hh - 0.0018, z);
+      parts.push(g);
+    }
+    hous.add(new THREE.Mesh(mergeGeometries(parts), ventM));
+  }
+  // rear exhaust grille, above the neck so it doesn't foul it
+  {
+    const back = ventStrip(BW * 0.20, 0.030, 7, 0.008);
+    const vb = new THREE.Mesh(back, ventM);
+    vb.rotation.x = Math.PI / 2;
+    vb.position.set(0, 0.036, BD / 2 - 0.428);
+    hous.add(vb);
+  }
 
   // ── front controls: a row of tactile buttons + power + LED
   const btnRowY = -BH / 2 + 0.028;

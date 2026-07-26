@@ -22,6 +22,19 @@ const mesh = (geo, material, pos = [0, 0, 0], rot = [0, 0, 0]) => {
 export const BED = { x: 1.65, w: 0.98, len: 1.98, z0: 0.42, z1: 2.40, top: 0.585, base: 0.30 };
 export const DESK = { x: 0.55, w: 1.80, d: 0.72, h: 0.745, z: ROOM.z0 + 0.36 };
 
+// The bookcase stands against the west wall with its back to it, so the shelves
+// open into the room. Its width therefore runs along Z and its depth along X —
+// hence ry. Anything placed on a shelf (see assets/props) has to be parented to
+// this same transform or it ends up floating in the middle of the floor.
+// z is south of the curtain, whose free edge reaches about z = 1.39.
+export const BOOKCASE = {
+  W: 0.86, H: 1.72, D: 0.30, T: 0.022,
+  z: 1.90,
+  ry: Math.PI / 2,
+  get x() { return ROOM.x0 + this.D / 2 + 0.024; },   // clears the skirting board
+  shelfY: 0.775,                                      // the shelf left free for props
+};
+
 /** A plump pillow: rounded box inflated by a dome and pinched at the corners. */
 function pillow(w, h, d, squash = 0.0, seed = 4) {
   const g = roundedBox(w, h, d, Math.min(w, h, d) * 0.42, 6);
@@ -417,10 +430,11 @@ function makeBooks(shelfW, shelfH, seed) {
 
 function buildBookcase(group) {
   const g = new THREE.Group();
-  g.position.set(ROOM.x0 + 0.19, 0, 1.45);
+  g.position.set(BOOKCASE.x, 0, BOOKCASE.z);
+  g.rotation.y = BOOKCASE.ry;
   group.add(g);
 
-  const W = 0.86, H = 1.72, D = 0.30, T = 0.022;
+  const { W, H, D, T } = BOOKCASE;
   const woodM = mat('walnut', { repeat: [1, 2] });
   const backM = mat('pine', { color: 0x8a7358 });
 
@@ -559,7 +573,8 @@ export function buildFurniture(scene) {
   const colliders = [
     { x0: BED.x - BED.w / 2 - 0.05, x1: ROOM.x1, z0: BED.z0 - 0.05, z1: ROOM.z1 },              // bed
     { x0: DESK.x - DESK.w / 2, x1: DESK.x + DESK.w / 2, z0: ROOM.z0, z1: DESK.z + DESK.d / 2 }, // desk
-    { x0: ROOM.x0, x1: ROOM.x0 + 0.40, z0: 0.55, z1: 2.35 },                                    // bookcase
+    { x0: ROOM.x0, x1: BOOKCASE.x + BOOKCASE.D / 2 + 0.06,
+      z0: BOOKCASE.z - BOOKCASE.W / 2 - 0.06, z1: BOOKCASE.z + BOOKCASE.W / 2 + 0.06 },          // bookcase
     { x0: 0.70, x1: 1.14, z0: 1.96, z1: 2.36 },                                                 // nightstand
     { x0: DESK.x - 0.42, x1: DESK.x + 0.34, z0: DESK.z + 0.55, z1: DESK.z + 1.18 },             // chair
   ];

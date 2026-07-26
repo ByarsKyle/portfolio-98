@@ -68,6 +68,8 @@ export function createOS() {
     { icon: 'me', label: 'My Portfolio', app: 'browser', arg: 'home' },
     { icon: 'computer', label: 'My Computer', app: 'computer' },
     { icon: 'ie', label: 'Internet\nExplorer', app: 'browser' },
+    { icon: 'mail', label: 'Outlook\nExpress', app: 'mail' },
+    { icon: 'vault', label: 'Password\nKeeper', app: 'vault' },
     { icon: 'modem', label: 'Dial-Up\nNetworking', app: 'dialup' },
     { icon: 'notepad', label: 'README.TXT', app: 'notepad', arg: 'readme' },
     { icon: 'mine', label: 'Minesweeper', app: 'minesweeper' },
@@ -537,6 +539,8 @@ export function createOS() {
   const START_ITEMS = [
     { label: 'Programs', icon: 'folderOpen', submenu: [
       { label: 'Internet Explorer', icon: 'ie', app: 'browser' },
+      { label: 'Outlook Express', icon: 'mail', app: 'mail' },
+      { label: 'Password Keeper', icon: 'vault', app: 'vault' },
       { label: 'Notepad', icon: 'notepad', app: 'notepad' },
       { label: 'Paint', icon: 'paint', app: 'paint' },
       { label: 'Media Player', icon: 'media', app: 'media' },

@@ -631,6 +631,63 @@ defIcon('me', (ctx, x, y, s) => {
   ctx.beginPath(); ctx.ellipse(x + 16 * u, y + 20 * u, 2.4 * u, 1.8 * u, 0, 0, Math.PI * 2); ctx.fill();
 });
 
+defIcon('mail', (ctx, x, y, s) => {
+  const u = s / 32;
+  // Outlook Express's envelope: white paper, blue flap, a blue swoosh
+  px(ctx, x + 2 * u, y + 8 * u, 28 * u, 18 * u, '#ffffff');
+  ctx.strokeStyle = '#606060'; ctx.lineWidth = Math.max(1, u);
+  ctx.strokeRect(x + 2 * u, y + 8 * u, 28 * u, 18 * u);
+  ctx.fillStyle = '#d8e4f4';
+  ctx.beginPath();
+  ctx.moveTo(x + 2 * u, y + 8 * u); ctx.lineTo(x + 16 * u, y + 19 * u);
+  ctx.lineTo(x + 30 * u, y + 8 * u); ctx.lineTo(x + 30 * u, y + 10 * u);
+  ctx.lineTo(x + 16 * u, y + 21 * u); ctx.lineTo(x + 2 * u, y + 10 * u);
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = '#1a4a9a'; ctx.lineWidth = Math.max(1, 1.4 * u);
+  ctx.beginPath();
+  ctx.moveTo(x + 2 * u, y + 8 * u); ctx.lineTo(x + 16 * u, y + 19 * u); ctx.lineTo(x + 30 * u, y + 8 * u);
+  ctx.stroke();
+  // the little speed swoosh, bottom right
+  ctx.fillStyle = '#e8a020';
+  ctx.beginPath();
+  ctx.moveTo(x + 19 * u, y + 27 * u); ctx.lineTo(x + 30 * u, y + 22 * u);
+  ctx.lineTo(x + 30 * u, y + 29 * u); ctx.lineTo(x + 21 * u, y + 29 * u);
+  ctx.closePath(); ctx.fill();
+});
+
+defIcon('vault', (ctx, x, y, s) => {
+  const u = s / 32;
+  // a padlock over a key-card grey body
+  px(ctx, x + 6 * u, y + 14 * u, 20 * u, 15 * u, '#c8a020');
+  px(ctx, x + 6 * u, y + 14 * u, 20 * u, 1 * u, '#ffe08a');
+  px(ctx, x + 6 * u, y + 14 * u, 1 * u, 15 * u, '#ffe08a');
+  px(ctx, x + 6 * u, y + 28 * u, 20 * u, 1 * u, '#7a5a08');
+  px(ctx, x + 25 * u, y + 14 * u, 1 * u, 15 * u, '#7a5a08');
+  // shackle
+  ctx.strokeStyle = '#a8a8b0'; ctx.lineWidth = Math.max(1.5, 3 * u); ctx.lineCap = 'butt';
+  ctx.beginPath(); ctx.arc(x + 16 * u, y + 13 * u, 6.5 * u, Math.PI, 0); ctx.stroke();
+  ctx.strokeStyle = '#e8e8f0'; ctx.lineWidth = Math.max(1, u);
+  ctx.beginPath(); ctx.arc(x + 16 * u, y + 13 * u, 8 * u, Math.PI, Math.PI * 1.45); ctx.stroke();
+  // keyhole
+  px(ctx, x + 15 * u, y + 20 * u, 3 * u, 6 * u, '#4a3a08');
+  ctx.fillStyle = '#4a3a08';
+  ctx.beginPath(); ctx.arc(x + 16.5 * u, y + 20 * u, 2.4 * u, 0, Math.PI * 2); ctx.fill();
+});
+
+defIcon('key', (ctx, x, y, s) => {
+  const u = s / 32;
+  ctx.fillStyle = '#d8b24a';
+  ctx.beginPath(); ctx.arc(x + 10 * u, y + 12 * u, 6.5 * u, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#f0e0c0';
+  ctx.beginPath(); ctx.arc(x + 10 * u, y + 12 * u, 2.6 * u, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#d8b24a';
+  px(ctx, x + 13 * u, y + 15 * u, 14 * u, 4 * u, '#d8b24a');
+  px(ctx, x + 21 * u, y + 19 * u, 3 * u, 4 * u, '#d8b24a');
+  px(ctx, x + 25 * u, y + 19 * u, 3 * u, 3 * u, '#d8b24a');
+  ctx.strokeStyle = '#8a6a18'; ctx.lineWidth = Math.max(1, u * 0.8);
+  ctx.strokeRect(x + 13 * u, y + 15 * u, 14 * u, 4 * u);
+});
+
 function bevelOutRaw(ctx, x, y, w, h, u) {
   ctx.fillStyle = '#ffffff'; ctx.fillRect(x, y, w, u); ctx.fillRect(x, y, u, h);
   ctx.fillStyle = '#606060'; ctx.fillRect(x, y + h - u, w, u); ctx.fillRect(x + w - u, y, u, h);

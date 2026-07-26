@@ -4,7 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 import * as THREE from 'three';
 import { mat } from '../forge/materials.js';
-import { roundedBox, extrude, roundRectPts, withUV2, mergeGeometries, cloth } from '../forge/geo.js';
+import { roundedBox, withUV2, mergeGeometries, cloth } from '../forge/geo.js';
 import { draw } from '../forge/texture.js';
 import { Noise2D, mulberry32 } from '../forge/noise.js';
 
@@ -231,11 +231,11 @@ function buildWindow(group) {
   return { W, x };
 }
 
-/** Panelled door on the south wall + frame + handle. */
+/** Plain flush door on the south wall + frame + round knob. */
 function buildDoor(group) {
   const trimM = mat('plaster', { color: 0xe8dcc9, roughness: 0.5 });
   const z = ROOM.z1;
-  const dw = 0.82, dh = 2.03, dx = -1.25;
+  const dw = 0.82, dh = 2.03, dx = -1.25, dt = 0.042;
 
   // door leaf, recessed into the wall, ajar by a few degrees
   const pivot = new THREE.Group();
@@ -247,36 +247,46 @@ function buildDoor(group) {
   leaf.position.set(dw / 2, dh / 2, 0);
   pivot.add(leaf);
 
+  // a plain painted slab — no panels, no mouldings
   const doorM = mat('plaster', { color: 0xdfd3c0, roughness: 0.46 });
-  const body = new THREE.Mesh(withUV2(roundedBox(dw, dh, 0.042, 0.004, 2)), doorM);
+  const body = new THREE.Mesh(withUV2(roundedBox(dw, dh, dt, 0.004, 2)), doorM);
   body.castShadow = true; body.receiveShadow = true;
   leaf.add(body);
 
-  // four raised panels
-  const panel = (w, h, y) => {
-    const g = extrude(roundRectPts(w, h, 0.02, 4), 0.014, 0.006);
-    const m = new THREE.Mesh(withUV2(g), doorM);
-    m.position.set(0, y, 0.026);
-    m.castShadow = true; m.receiveShadow = true;
-    leaf.add(m);
-    const m2 = m.clone(); m2.position.z = -0.026; m2.rotation.y = Math.PI; leaf.add(m2);
-  };
-  panel(dw - 0.20, 0.50, 0.62);
-  panel(dw - 0.20, 0.50, 0.06);
-  panel(dw - 0.20, 0.42, -0.52);
-  panel(dw - 0.20, 0.20, -0.86);
+  // Round brass knob on a rose, one each side. Not fully metallic: this corner
+  // of the room is lit by one warm bulb and a pure metal reads as a black ball,
+  // so keep enough diffuse in it for the brass colour to show.
+  const brass = mat('steel', { color: 0xd9b45e, roughness: 0.42, metalness: 0.40 });
+  const knobX = dw / 2 - 0.085, knobY = 0.02;
+  for (const s of [1, -1]) {
+    const face = s * (dt / 2);
+    const rose = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.037, 0.008, 20), brass);
+    rose.rotation.x = Math.PI / 2;
+    rose.position.set(knobX, knobY, face + s * 0.004);
+    rose.castShadow = true;
+    leaf.add(rose);
 
-  // brass handle
-  const brass = mat('steel', { color: 0xb8863a, roughness: 0.28, metalness: 1 });
-  const rose = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.012, 20), brass);
-  rose.rotation.x = Math.PI / 2; rose.position.set(dw / 2 - 0.08, 0.02, 0.026);
-  rose.castShadow = true; leaf.add(rose);
-  const lever = new THREE.Mesh(new THREE.CapsuleGeometry(0.011, 0.09, 4, 10), brass);
-  lever.rotation.z = Math.PI / 2; lever.position.set(dw / 2 - 0.125, 0.02, 0.048);
-  lever.castShadow = true; leaf.add(lever);
-  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.013, 0.03, 12), brass);
-  stem.rotation.x = Math.PI / 2; stem.position.set(dw / 2 - 0.08, 0.02, 0.04);
-  leaf.add(stem);
+    const shank = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.013, 0.026, 14), brass);
+    shank.rotation.x = Math.PI / 2;
+    shank.position.set(knobX, knobY, face + s * 0.021);
+    leaf.add(shank);
+
+    // the knob itself: a squashed ball, flattened where it meets the shank
+    const ball = new THREE.SphereGeometry(0.027, 20, 16);
+    ball.scale(1, 1, 0.82);
+    const knob = new THREE.Mesh(withUV2(ball), brass);
+    knob.position.set(knobX, knobY, face + s * 0.055);
+    knob.castShadow = true;
+    leaf.add(knob);
+  }
+
+  // keyhole escutcheon below the knob, on the room side only
+  const keyhole = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.011, 0.011, 0.004, 14), brass,
+  );
+  keyhole.rotation.x = Math.PI / 2;
+  keyhole.position.set(knobX, knobY - 0.10, dt / 2 + 0.002);
+  leaf.add(keyhole);
 
   // architrave
   const arch = [];

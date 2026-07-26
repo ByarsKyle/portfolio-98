@@ -11,7 +11,7 @@ import {
 import { draw, glowSprite } from '../forge/texture.js';
 import { Noise2D, mulberry32 } from '../forge/noise.js';
 import { ROOM } from './room.js';
-import { DESK, BED } from './furniture.js';
+import { DESK, BED, BOOKCASE } from './furniture.js';
 
 const mesh = (geo, material, pos = [0, 0, 0], rot = [0, 0, 0]) => {
   const m = new THREE.Mesh(withUV2(geo), material);
@@ -650,25 +650,30 @@ function buildClutter(group) {
       [DESK.x - 1.20, 0.030, DESK.z + 0.30], [0.4, 1.2, 0.8]));
   }
 
-  // ── books and a mug on the free bookcase shelf
+  // ── books and a trophy on the free bookcase shelf.
+  // Parented to the bookcase's own transform, so they turn with it.
   {
-    const shelfY = 0.775;
-    const bx = ROOM.x0 + 0.19;
+    const shelfY = BOOKCASE.shelfY;
+    const shelf = new THREE.Group();
+    shelf.position.set(BOOKCASE.x, 0, BOOKCASE.z);
+    shelf.rotation.y = BOOKCASE.ry;
+    group.add(shelf);
+
     // stacked paperbacks
     let sy = shelfY + 0.012;
     for (let i = 0; i < 3; i++) {
       const th = 0.026 + i * 0.004;
       const b = mesh(roundedBox(0.14 - i * 0.008, th, 0.19, 0.003, 1),
         mat('paper', { color: [0x3a5a7a, 0x7a3a3a, 0xc8b48a][i] }),
-        [bx - 0.22, sy + th / 2, 0]);
+        [-0.22, sy + th / 2, 0]);
       b.rotation.y = (i - 1) * 0.05;
-      group.add(b);
+      shelf.add(b);
       sy += th;
     }
     // a small trophy
     const trophy = new THREE.Group();
-    trophy.position.set(bx + 0.24, shelfY + 0.012, 0.02);
-    group.add(trophy);
+    trophy.position.set(0.24, shelfY + 0.012, 0.02);
+    shelf.add(trophy);
     const brass = mat('steel', { color: 0xc9a04a, roughness: 0.28, metalness: 1 });
     trophy.add(mesh(roundedBox(0.055, 0.020, 0.055, 0.004, 2), mat('walnut'), [0, 0.010, 0]));
     trophy.add(mesh(lathe([[0.010, 0], [0.008, 0.02], [0.007, 0.045], [0.020, 0.055],
@@ -825,7 +830,8 @@ export function buildProps(scene) {
   buildLamp(group);
   buildLantern(group);
   buildPosters(group);
-  const plantA = buildPlant(group, [ROOM.x0 + 0.19, 1.735, 1.45], 0.9);   // top of the bookcase
+  // top of the bookcase, offset along the shelf toward the window end
+  const plantA = buildPlant(group, [BOOKCASE.x, 1.735, BOOKCASE.z - 0.24], 0.9);
   const plantB = buildPlant(group, [ROOM.x1 - 0.24, 0, ROOM.z0 + 0.26], 1.9); // floor plant in the corner
   const clocks = [buildAlarmClock(group)];
   buildClutter(group);

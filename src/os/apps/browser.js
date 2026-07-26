@@ -307,6 +307,44 @@ const PAGES = {
     ],
   },
 
+  'about:': {
+    title: 'About this browser',
+    url: 'about:',
+    bg: '#ffffff',
+    blocks: [
+      { t: 'h1', text: 'About this browser' },
+      { t: 'p', text: 'You are looking at a 640x480 canvas being drawn inside a WebGL bedroom. There is no HTML in this window — every pixel of Internet Explorer, and of the page you are reading, is painted by hand each frame. Some of it is a period reconstruction. Some of it is genuinely talking to the internet. Here is which is which.' },
+      { t: 'hr' },
+      { t: 'h2', text: 'Real' },
+      { t: 'ul', items: [
+        'The address bar works. Type a domain and press Enter and this window fetches that page off the live web, right now.',
+        'Pages are fetched by a small serverless function (/api/surf) which downloads the HTML, throws away the scripts, styles and frames, and hands back a list of drawable blocks.',
+        'Links on a fetched page are real links. Clicking one fetches it.',
+        'The byte counts in the status bar are the real size of what came down the wire.',
+        'Back and Forward work across both this little 1998 site and anything you fetch.',
+      ] },
+      { t: 'h2', text: 'Simulated' },
+      { t: 'ul', items: [
+        'The modem. Dial-Up Networking, the handshake noise and the connection gate are all theatre — your connection is whatever it actually is.',
+        'The slowness. Fetched pages are revealed at roughly 5 KB/s, like a 56k line, but capped at about three and a half seconds so it stays a joke rather than a punishment.',
+        'The local pages (this homepage, the guestbook, AltaVista) are hand-written data in the source, not fetched from anywhere.',
+        'The visitor counter, the guestbook CGI error, and the 40-bit cipher strength.',
+      ] },
+      { t: 'h2', text: 'Not supported, on purpose' },
+      { t: 'ul', items: [
+        'Pictures. A canvas cannot safely decode arbitrary remote images, so every picture arrives as a placeholder with its alt text.',
+        'JavaScript, CSS, cookies, logins, forms and video. Pages that are built entirely out of scripts will look empty — which is roughly what 1998 would have made of them too.',
+        'Private addresses. The fetcher refuses anything on a local or internal network.',
+      ] },
+      { t: 'hr' },
+      { t: 'links', items: [
+        { text: '← Back to the homepage', href: 'home' },
+        { text: '→ Try a real site: example.com', href: 'http://example.com/' },
+      ] },
+      { t: 'small', text: 'Microsoft Internet Explorer 4.01 · rendered on a 2D canvas · no frames, no scripts, no cookies' },
+    ],
+  },
+
   404: {
     title: '404 Not Found',
     url: 'http://www.example.com/',
@@ -346,13 +384,15 @@ export const browser = {
 
   create(arg, api) {
     const st = {
-      page: null,
-      pageKey: null,
-      history: [],
+      page: null,          // local PAGES entry or a fetched { blocks } page
+      pageKey: null,       // local key, null for fetched pages
+      history: [],         // entries: { key } local | { url } fetched
       hIndex: -1,
       scroll: 0,
-      loading: 0,
+      loading: 0,          // local page "modem" timer
+      loadTotal: 1,
       pending: null,
+      pushNext: true,
       status: 'Done',
       throb: 0,
       links: [],
@@ -360,7 +400,17 @@ export const browser = {
       visited: new Set(),
       guest: { name: '', msg: '', field: 0 },
       search: '',
-      offlineFor: null,
+      err: null,           // { title, url, reason, bullets, connect }
+      net: null,           // in-flight fetch/stream, see navigateUrl()
+      seq: 0,              // navigation token, kills stale fetches
+      abort: null,
+      cache: new Map(),    // url -> surf payload, so Back is cheap
+      progress: 0,
+      reveal: Infinity,    // blocks revealed so far while "downloading"
+      addr: '',
+      addrFocus: false,
+      addrCaret: 0,
+      addrSel: false,
       t: 0,
     };
 
@@ -375,25 +425,33 @@ export const browser = {
         { label: 'Edit', items: [{ label: 'Cut', disabled: true }, { label: 'Copy', disabled: true }, { label: 'Paste', disabled: true }] },
         { label: 'View', items: [{ label: 'Toolbars', checked: true }, { label: 'Status Bar', checked: true }, '-', { label: 'Refresh', id: 'refresh', accel: 'F5' }, { label: 'Source', id: 'source' }] },
         { label: 'Go', items: [{ label: 'Back', id: 'back' }, { label: 'Forward', id: 'forward' }, { label: 'Home Page', id: 'home' }, '-', { label: 'Search the Web', id: 'search' }] },
-        { label: 'Favorites', items: [{ label: 'My Portfolio', id: 'go:home' }, { label: 'Projects', id: 'go:projects' }, { label: 'Guestbook', id: 'go:guestbook' }, { label: 'Cool Links', id: 'go:links' }] },
-        { label: 'Help', items: [{ label: 'About Internet Explorer', id: 'about' }] },
+        { label: 'Favorites', items: [{ label: 'My Portfolio', id: 'go:home' }, { label: 'Projects', id: 'go:projects' }, { label: 'Guestbook', id: 'go:guestbook' }, { label: 'Cool Links', id: 'go:links' }, '-', { label: 'Example Domain', id: 'surf:http://example.com/' }, { label: 'Wikipedia', id: 'surf:https://en.wikipedia.org/wiki/Windows_98' }] },
+        { label: 'Help', items: [{ label: 'What is real here?', id: 'go:about:' }, '-', { label: 'About Internet Explorer', id: 'about' }] },
       ],
 
       init(win, papi) {
-        navigate(arg || 'home', papi, true);
+        openAddress(arg || 'home', papi, { initial: true });
       },
-      setArg(a, win, papi) { navigate(a || 'home', papi, false); },
+      setArg(a, win, papi) { openAddress(a || 'home', papi); },
 
       update(dt, win, papi) {
         st.t += dt;
         if (st.loading > 0) {
           st.loading -= dt;
           st.throb += dt;
+          st.progress = 1 - Math.max(0, st.loading) / st.loadTotal;
           papi.setBusy(true);
           if (st.loading <= 0) {
             st.loading = 0;
             finishLoad(papi);
           }
+        }
+        if (st.net) {
+          st.net.t += dt;
+          st.throb += dt;
+          papi.setBusy(true);
+          if (st.net.phase === 'fetch') tickFetch();
+          else tickStream(papi);
         }
       },
 
@@ -402,8 +460,10 @@ export const browser = {
         else if (id === 'back') back(papi);
         else if (id === 'forward') forward(papi);
         else if (id === 'home' || id === 'Home Page') navigate('home', papi);
-        else if (id === 'refresh' || id === 'Refresh') navigate(st.pageKey, papi);
+        else if (id === 'refresh' || id === 'Refresh') refresh(papi);
         else if (id === 'search' || id === 'Search the Web') navigate('altavista', papi);
+        else if (id === 'Open...') { st.addrFocus = true; st.addrSel = true; st.addr = currentUrl(); st.addrCaret = st.addr.length; }
+        else if (id?.startsWith('surf:')) navigateUrl(id.slice(5), papi);
         else if (id === 'source') {
           papi.open('notepad', 'source');
         } else if (id === 'about') {
@@ -414,7 +474,10 @@ export const browser = {
       },
 
       key(e, win, papi) {
-        if (e.key === 'F5') { navigate(st.pageKey, papi); return; }
+        if (st.addrFocus) { addrKey(e, papi); return; }
+        if (e.key === 'F5') { refresh(papi); return; }
+        if (e.key === 'F6' || (e.ctrlKey && (e.key === 'l' || e.key === 'L'))) { focusAddress(); return; }
+        if (e.key === 'Escape' && st.net) { stop(); return; }
         if (e.key === 'Backspace' && st.guest.field === 0 && st.search === '') { back(papi); return; }
         // guestbook / search typing
         const page = st.page;
@@ -450,23 +513,65 @@ export const browser = {
       st.guest.name = ''; st.guest.msg = '';
     }
 
-    function navigate(key, papi, initial = false) {
+    // ── address parsing ──────────────────────────────────────
+    const isUrl = (s) => /^https?:\/\//i.test(String(s ?? ''));
+
+    function normUrl(s) {
+      const raw = String(s).trim();
+      return isUrl(raw) ? raw : `http://${raw.replace(/^\/+/, '')}`;
+    }
+
+    /** What the address bar shows when it is not being typed into. */
+    function currentUrl() {
+      if (st.net) return st.net.url;
+      if (st.err) return st.err.url ?? 'about:blank';
+      return st.page?.url ?? 'about:blank';
+    }
+
+    /** Anything the user can type or click: local key, absolute URL, about:. */
+    function openAddress(raw, papi, opts = {}) {
+      const s = String(raw ?? '').trim();
+      if (!s) return;
+      const low = s.toLowerCase();
+      if (low.startsWith('about:')) { navigate('about:', papi, opts); return; }
+      if (isUrl(s)) { navigateUrl(s, papi, opts); return; }
+      if (PAGES[s]) { navigate(s, papi, opts); return; }
+      if (PAGES[low]) { navigate(low, papi, opts); return; }
+      if (/[a-z0-9-]\.[a-z]{2,}/i.test(s) || s.includes('.')) { navigateUrl(normUrl(s), papi, opts); return; }
+      // a bare word nobody has a page for: 1998 says search for it
+      st.search = s;
+      navigate('altavista', papi, opts);
+    }
+
+    function follow(href, papi) {
+      if (!href) return;
+      if (isUrl(href)) navigateUrl(href, papi);
+      else navigate(href, papi);
+    }
+
+    function refresh(papi) {
+      if (st.page?.remote) navigateUrl(st.page.url, papi, { push: false, fresh: true });
+      else if (st.err?.retry) follow(st.err.retry, papi);
+      else navigate(st.pageKey ?? 'home', papi);
+    }
+
+    // ── local pages ──────────────────────────────────────────
+    function navigate(key, papi, opts = {}) {
       if (!PAGES[key]) key = '404';
+      stop();
       // dial-up gate: no connection, no web
       if (papi.state.dialup.state !== 'online') {
-        st.offlineFor = key;
-        st.pageKey = key;
-        st.page = null;
-        st.status = 'Cannot find server';
-        st.scroll = 0;
-        if (!initial) papi.sound('error');
+        showOffline(PAGES[key].url, key, papi, opts.initial);
         return;
       }
-      st.offlineFor = null;
+      st.err = null;
       st.pending = key;
+      st.pushNext = opts.push !== false;
       st.loading = 0.5 + Math.random() * 1.5;   // 56k is not fast
+      st.loadTotal = st.loading;
       st.status = `Opening page ${PAGES[key].url}...`;
       st.scroll = 0;
+      st.reveal = Infinity;
       papi.sound('click');
     }
 
@@ -477,26 +582,267 @@ export const browser = {
       st.pageKey = key;
       st.visited.add(key);
       st.status = 'Done';
-      if (st.history[st.hIndex] !== key) {
-        st.history = st.history.slice(0, st.hIndex + 1);
-        st.history.push(key);
-        st.hIndex = st.history.length - 1;
-      }
+      st.progress = 0;
+      if (st.pushNext) pushHistory({ key });
+      st.pushNext = true;
       papi.sound('ding', { soft: true });
     }
 
-    function back(papi) {
-      if (st.hIndex > 0) {
-        st.hIndex--;
-        const key = st.history[st.hIndex];
-        st.pending = key; st.loading = 0.25; st.scroll = 0;
+    // ── the real web ─────────────────────────────────────────
+    const WIRE_BPS = 5120;      // 56k, near enough
+    const LOAD_MIN = 0.5;
+    const LOAD_MAX = 3.5;       // dial-up should be funny, not tedious
+
+    async function navigateUrl(rawUrl, papi, opts = {}) {
+      const url = normUrl(rawUrl);
+      stop();
+      if (papi.state.dialup.state !== 'online') {
+        showOffline(url, null, papi, opts.initial);
+        return;
+      }
+      st.err = null;
+      st.scroll = 0;
+      st.reveal = 0;
+      st.progress = 0;
+      st.status = `Opening page ${url}...`;
+      papi.sound('click');
+
+      const seq = ++st.seq;
+      st.net = { phase: 'fetch', url, t: 0, dur: 1, total: 0, page: null, imgs: 0, push: opts.push !== false };
+
+      // already been there: the page is "in the cache", so it comes back fast
+      const cached = opts.fresh ? null : st.cache.get(url);
+      if (cached) { beginStream(cached, url, true); return; }
+
+      let payload = null;
+      let problem = null;
+      try {
+        const ctrl = new AbortController();
+        st.abort = ctrl;
+        const res = await fetch(`/api/surf?url=${encodeURIComponent(url)}`, {
+          signal: ctrl.signal, headers: { accept: 'application/json' },
+        });
+        const ctype = res.headers.get('content-type') || '';
+        if (!ctype.includes('json')) {
+          // /api/surf missing or broken — a static host with no function runtime
+          problem = {
+            reason: 'Cannot find server',
+            note: res.status === 404
+              ? 'The modem dialled out, but nothing answered. The page fetcher (/api/surf) is not responding on this host.'
+              : `The page fetcher answered with ${res.status} ${res.statusText || ''} instead of a page.`,
+          };
+        } else {
+          const json = await res.json();
+          if (json?.ok) payload = json;
+          else problem = { reason: json?.reason || 'The page cannot be displayed' };
+        }
+      } catch (err) {
+        if (err?.name === 'AbortError') return;
+        problem = { reason: 'Cannot find server or DNS Error', note: String(err?.message ?? err).slice(0, 120) };
+      }
+      if (seq !== st.seq) return;   // a newer navigation won
+      st.abort = null;
+      if (payload) {
+        if (st.cache.size > 24) st.cache.clear();
+        st.cache.set(url, payload);
+        beginStream(payload, url);
+      } else {
+        st.net = null;
+        showError(url, problem.reason, problem.note, papi);
       }
     }
+
+    /** Turn a surf payload into a page and start dribbling it in. */
+    function beginStream(payload, url, cached = false) {
+      const total = Math.max(0, payload.bytes || 0);        // real bytes, for the status bar
+      const spent = st.net?.t ?? 0;
+      const budget = cached
+        ? 0.45
+        : Math.min(LOAD_MAX, Math.max(LOAD_MIN, Math.max(1400, total) / WIRE_BPS));
+      const page = {
+        title: payload.title || payload.finalUrl || url,
+        url: payload.finalUrl || url,
+        bg: '#ffffff',
+        blocks: payload.blocks ?? [],
+        remote: true,
+      };
+      st.net = {
+        ...st.net,
+        phase: 'stream',
+        t: 0,
+        dur: Math.max(0.35, budget - spent),
+        total,
+        page,
+        imgs: page.blocks.filter((b) => b.t === 'img').length,
+      };
+      st.reveal = 0;
+    }
+
+    function tickFetch() {
+      st.progress = Math.min(0.2, st.net.t * 0.07);
+      st.status = st.net.t < 0.9
+        ? `Opening page ${st.net.url}...`
+        : 'Web site found. Waiting for reply...';
+    }
+
+    function tickStream(papi) {
+      const n = st.net;
+      const f = Math.min(1, n.t / n.dur);
+      st.progress = f;
+      const blocks = n.page.blocks;
+      st.reveal = Math.max(1, Math.ceil(f * blocks.length));
+      const bytes = Math.floor(f * n.total);
+      const last = blocks[Math.min(blocks.length, st.reveal) - 1];
+      if (last?.t === 'img' && n.imgs > 0 && f < 1) {
+        const done = blocks.slice(0, st.reveal).filter((b) => b.t === 'img').length;
+        st.status = `Downloading picture ${done} of ${n.imgs}...`;
+      } else {
+        st.status = `${bytes.toLocaleString('en-US')} bytes transferred`;
+      }
+      if (f >= 1) finishStream(papi);
+    }
+
+    function finishStream(papi) {
+      const n = st.net;
+      st.net = null;
+      st.abort = null;
+      st.page = n.page;
+      st.pageKey = null;
+      st.reveal = Infinity;
+      st.progress = 0;
+      st.visited.add(n.url);
+      st.visited.add(n.page.url);
+      st.status = `Done · ${n.total.toLocaleString('en-US')} bytes transferred`;
+      if (n.push) pushHistory({ url: n.page.url });
+      papi.sound('ding', { soft: true });
+    }
+
+    /** Cancel whatever the modem is doing. */
+    function stop() {
+      st.seq += 1;
+      try { st.abort?.abort(); } catch { /* already gone */ }
+      st.abort = null;
+      st.net = null;
+      st.loading = 0;
+      st.pending = null;
+      st.progress = 0;
+      st.reveal = Infinity;
+    }
+
+    // ── error pages ──────────────────────────────────────────
+    function showOffline(url, key, papi, initial) {
+      st.err = {
+        url: url ?? 'about:blank',
+        retry: key ?? url,
+        reason: 'Cannot find server or DNS Error',
+        note: 'The page you are looking for is currently unavailable. Your computer is not connected to the Internet.',
+        bullets: [
+          'Open Dial-Up Networking and connect to your service provider.',
+          'Check that the phone line is plugged in and nobody is on it.',
+          'Click the button below and wait about ten seconds.',
+        ],
+        connect: true,
+      };
+      st.page = null;
+      st.pageKey = typeof key === 'string' ? key : null;
+      st.status = 'Cannot find server';
+      st.scroll = 0;
+      if (!initial) papi.sound('error');
+    }
+
+    function showError(url, reason, note, papi) {
+      let host = url;
+      try { host = new URL(url).host; } catch { /* keep the raw string */ }
+      st.err = {
+        url,
+        retry: url,
+        reason: reason || 'The page cannot be displayed',
+        note: note || `The page you are looking for is currently unavailable. The Web site ${host} might be experiencing technical difficulties, or the page may have moved.`,
+        bullets: [
+          'Check that the address is spelled correctly.',
+          'Click Refresh, or try again later.',
+          'This browser cannot display pictures, scripts or secure logins.',
+        ],
+        connect: false,
+      };
+      st.page = null;
+      st.pageKey = null;
+      st.scroll = 0;
+      st.status = reason || 'Cannot find server';
+      papi.sound('error');
+    }
+
+    // ── history ──────────────────────────────────────────────
+    function pushHistory(entry) {
+      const cur = st.history[st.hIndex];
+      if (cur && cur.key === entry.key && cur.url === entry.url) return;
+      st.history = st.history.slice(0, st.hIndex + 1);
+      st.history.push(entry);
+      st.hIndex = st.history.length - 1;
+    }
+
+    function goEntry(entry, papi) {
+      if (!entry) return;
+      if (entry.url) { navigateUrl(entry.url, papi, { push: false }); return; }
+      stop();
+      st.err = null;
+      st.pending = entry.key;
+      st.pushNext = false;
+      st.loading = 0.25;
+      st.loadTotal = 0.25;
+      st.scroll = 0;
+    }
+
+    function back(papi) {
+      if (st.hIndex > 0) { st.hIndex--; goEntry(st.history[st.hIndex], papi); }
+    }
     function forward(papi) {
-      if (st.hIndex < st.history.length - 1) {
-        st.hIndex++;
-        const key = st.history[st.hIndex];
-        st.pending = key; st.loading = 0.25; st.scroll = 0;
+      if (st.hIndex < st.history.length - 1) { st.hIndex++; goEntry(st.history[st.hIndex], papi); }
+    }
+
+    // ── address bar input ────────────────────────────────────
+    function focusAddress() {
+      st.addrFocus = true;
+      st.addr = currentUrl();
+      st.addrCaret = st.addr.length;
+      st.addrSel = true;
+    }
+
+    function addrKey(e, papi) {
+      const k = e.key;
+      const clearSel = () => {
+        if (!st.addrSel) return;
+        st.addr = ''; st.addrCaret = 0; st.addrSel = false;
+      };
+      if (k === 'Escape') { st.addrFocus = false; st.addrSel = false; return; }
+      if (k === 'Enter') {
+        st.addrFocus = false; st.addrSel = false;
+        const typed = st.addr.trim();
+        if (typed) openAddress(typed, papi);
+        return;
+      }
+      if (k === 'Backspace') {
+        if (st.addrSel) { clearSel(); return; }
+        if (st.addrCaret > 0) {
+          st.addr = st.addr.slice(0, st.addrCaret - 1) + st.addr.slice(st.addrCaret);
+          st.addrCaret -= 1;
+        }
+        return;
+      }
+      if (k === 'Delete') {
+        if (st.addrSel) { clearSel(); return; }
+        st.addr = st.addr.slice(0, st.addrCaret) + st.addr.slice(st.addrCaret + 1);
+        return;
+      }
+      if (k === 'ArrowLeft') { st.addrSel = false; st.addrCaret = Math.max(0, st.addrCaret - 1); return; }
+      if (k === 'ArrowRight') { st.addrSel = false; st.addrCaret = Math.min(st.addr.length, st.addrCaret + 1); return; }
+      if (k === 'Home') { st.addrSel = false; st.addrCaret = 0; return; }
+      if (k === 'End') { st.addrSel = false; st.addrCaret = st.addr.length; return; }
+      if (k === 'Tab') { st.addrFocus = false; st.addrSel = false; return; }
+      if (k.length === 1 && !e.ctrlKey && !e.metaKey) {
+        clearSel();
+        st.addr = st.addr.slice(0, st.addrCaret) + k + st.addr.slice(st.addrCaret);
+        st.addrCaret += 1;
       }
     }
 
@@ -511,7 +857,7 @@ export const browser = {
       const btns = [
         { label: 'Back', icon: 'left', on: st.hIndex > 0 },
         { label: 'Forward', icon: 'right', on: st.hIndex < st.history.length - 1 },
-        { label: 'Stop', icon: 'stop', on: st.loading > 0 },
+        { label: 'Stop', icon: 'stop', on: st.loading > 0 || !!st.net },
         { label: 'Refresh', icon: 'refresh', on: true },
         { label: 'Home', icon: 'home', on: true },
       ];
@@ -568,7 +914,7 @@ export const browser = {
       fill(ctx, tx, r.y + 2, tw, 34, C.face);
       ctx.save();
       ctx.translate(tx + tw / 2, r.y + 17);
-      if (st.loading > 0) ctx.rotate(st.throb * 3.4);
+      if (st.loading > 0 || st.net) ctx.rotate(st.throb * 3.4);
       const g = ctx.createRadialGradient(-2, -3, 1, 0, 0, 11);
       g.addColorStop(0, '#a8dcff'); g.addColorStop(0.6, '#2a80d0'); g.addColorStop(1, '#0a3a70');
       ctx.fillStyle = g;
@@ -578,18 +924,33 @@ export const browser = {
       ctx.beginPath(); ctx.moveTo(-11, 0); ctx.lineTo(11, 0); ctx.stroke();
       ctx.restore();
 
-      // ── address bar
+      // ── address bar (a real, typeable field)
       const ay = r.y + 38;
       text(ctx, 'Address', r.x + 4, ay + 7, { baseline: 'middle', font: FONT.small });
       const axx = r.x + 46, aw = r.w - 50;
       fill(ctx, axx, ay, aw, 16, C.white);
       bevelIn(ctx, axx, ay, aw, 16);
-      const url = st.page?.url ?? (st.offlineFor ? PAGES[st.offlineFor]?.url : 'about:blank');
       drawIcon(ctx, 'ie', axx + 2, ay + 1, 13);
+      const url = st.addrFocus ? st.addr : currentUrl();
+      const fieldX = axx + 18, fieldW = aw - 36;
       ctx.save();
-      ctx.beginPath(); ctx.rect(axx + 17, ay, aw - 34, 16); ctx.clip();
-      text(ctx, url, axx + 18, ay + 8, { baseline: 'middle', font: FONT.small });
+      ctx.beginPath(); ctx.rect(axx + 17, ay + 1, aw - 34, 14); ctx.clip();
+      ctx.font = FONT.small;
+      // scroll the text so the caret stays visible
+      const caretX = ctx.measureText(url.slice(0, st.addrCaret)).width;
+      const shift = st.addrFocus ? Math.max(0, caretX - fieldW + 8) : 0;
+      if (st.addrFocus && st.addrSel && url) {
+        fill(ctx, fieldX - 1, ay + 2, Math.min(fieldW + 2, ctx.measureText(url).width + 2), 12, C.select);
+      }
+      text(ctx, url, fieldX - shift, ay + 8, {
+        baseline: 'middle', font: FONT.small,
+        color: st.addrFocus && st.addrSel ? C.selectText : C.text,
+      });
+      if (st.addrFocus && !st.addrSel && Math.floor(st.t * 2) % 2 === 0) {
+        fill(ctx, fieldX + caretX - shift, ay + 2, 1, 12, '#000000');
+      }
       ctx.restore();
+      st.addrRect = { x: axx, y: ay, w: aw - 18, h: 16 };
       button(ctx, axx + aw - 16, ay + 1, 15, 14, null);
       arrow(ctx, axx + aw - 8.5, ay + 8, 'down');
 
@@ -597,7 +958,8 @@ export const browser = {
       const vy = ay + 20;
       const vh = r.h - (vy - r.y) - STATUS_H;
       const SB = 15;
-      fill(ctx, r.x + 1, vy, r.w - 2, vh, st.page?.bg ?? C.white);
+      const shown = st.net?.phase === 'stream' ? st.net.page : st.page;
+      fill(ctx, r.x + 1, vy, r.w - 2, vh, shown?.bg ?? C.white);
       bevelIn(ctx, r.x, vy - 1, r.w, vh + 1);
 
       const view = { x: r.x + 2, y: vy + 1, w: r.w - 4 - SB, h: vh - 2 };
@@ -605,9 +967,12 @@ export const browser = {
       ctx.beginPath(); ctx.rect(view.x, view.y, view.w, view.h); ctx.clip();
 
       let contentH = 0;
-      if (st.loading > 0) {
+      st.links = [];
+      if (st.net?.phase === 'stream') {
+        contentH = drawPage(ctx, view, st.net.page, papi, st.reveal);
+      } else if (st.loading > 0 || st.net) {
         text(ctx, 'Opening page...', view.x + 8, view.y + 10, { color: '#444' });
-      } else if (st.offlineFor) {
+      } else if (st.err) {
         contentH = drawOffline(ctx, view, papi);
       } else if (st.page) {
         contentH = drawPage(ctx, view, st.page, papi);
@@ -628,16 +993,17 @@ export const browser = {
       bevelIn(ctx, r.x + 1, sy + 2, r.w * 0.6, 14);
       ctx.save();
       ctx.beginPath(); ctx.rect(r.x + 3, sy + 2, r.w * 0.6 - 4, 14); ctx.clip();
-      const statusMsg = st.hover >= 0 && st.links[st.hover]
-        ? (PAGES[st.links[st.hover].href]?.url ?? 'http://www.example.com/')
+      const hovered = st.hover >= 0 ? st.links[st.hover] : null;
+      const statusMsg = hovered
+        ? (isUrl(hovered.href) ? hovered.href : (PAGES[hovered.href]?.url ?? 'http://www.example.com/'))
         : st.status;
       text(ctx, statusMsg, r.x + 5, sy + 9, { baseline: 'middle', font: FONT.small });
       ctx.restore();
-      // progress
-      if (st.loading > 0) {
+      // progress — driven by real bytes when we are fetching for real
+      if (st.loading > 0 || st.net) {
         const px = r.x + r.w * 0.62;
         bevelIn(ctx, px, sy + 2, r.w * 0.22, 14);
-        const frac = 1 - Math.min(1, st.loading / 1.6);
+        const frac = Math.max(0, Math.min(1, st.progress));
         ctx.fillStyle = C.titleA1;
         const blocks = Math.floor((r.w * 0.22 - 4) / 6 * frac);
         for (let i = 0; i < blocks; i++) ctx.fillRect(px + 2 + i * 6, sy + 4, 4, 10);
@@ -647,51 +1013,128 @@ export const browser = {
       text(ctx, zone, r.x + r.w - 72, sy + 9, { baseline: 'middle', font: FONT.small });
     }
 
+    // "The page cannot be displayed" — offline, dead server, refused, 404
     function drawOffline(ctx, view, papi) {
+      const e = st.err ?? {};
       const x = view.x + 10;
       let y = view.y + 14 - st.scroll;
+      st.connectBtn = null;
+      st.retryBtn = null;
       text(ctx, 'The page cannot be displayed', x, y, { font: 'bold 15px Tahoma, sans-serif', color: '#000' });
       y += 26;
       ctx.font = FONT.ui;
-      const lines = wrap(ctx,
-        'The page you are looking for is currently unavailable. Your computer is not connected to the Internet.',
-        view.w - 24);
-      lines.forEach((l) => { text(ctx, l, x, y); y += 15; });
+      wrap(ctx, e.note ?? 'The page you are looking for is currently unavailable.', view.w - 24)
+        .forEach((l) => { text(ctx, l, x, y); y += 15; });
       y += 10;
       text(ctx, 'Please try the following:', x, y, { font: FONT.uiBold }); y += 20;
-      const bullets = [
-        'Open Dial-Up Networking and connect to your service provider.',
-        'Check that the phone line is plugged in and nobody is on it.',
-        'Click the button below and wait about ten seconds.',
-      ];
-      bullets.forEach((b) => {
+      (e.bullets ?? []).forEach((b) => {
         text(ctx, '•', x + 4, y);
-        wrap(ctx, b, view.w - 40).forEach((l, i) => { text(ctx, l, x + 16, y); y += 15; });
+        wrap(ctx, b, view.w - 40).forEach((l) => { text(ctx, l, x + 16, y); y += 15; });
       });
       y += 14;
-      const bw = 150, bh = 24;
-      button(ctx, x, y, bw, bh, 'Connect to the Internet', { font: FONT.ui });
-      st.connectBtn = { x, y, w: bw, h: bh };
+      const bh = 24;
+      if (e.connect) {
+        button(ctx, x, y, 150, bh, 'Connect to the Internet', { font: FONT.ui });
+        st.connectBtn = { x, y, w: 150, h: bh };
+      } else {
+        button(ctx, x, y, 90, bh, 'Try Again', { font: FONT.ui });
+        st.retryBtn = { x, y, w: 90, h: bh };
+      }
       y += bh + 16;
-      text(ctx, 'Cannot find server or DNS Error', x, y, { font: FONT.small, color: '#555' });
+      text(ctx, e.reason ?? 'Cannot find server or DNS Error', x, y, { font: FONT.small, color: '#555' });
       y += 14;
+      if (e.url) {
+        ctx.font = FONT.small;
+        wrap(ctx, e.url, view.w - 24).forEach((l) => { text(ctx, l, x, y, { font: FONT.small, color: '#555' }); y += 13; });
+      }
       text(ctx, 'Internet Explorer', x, y, { font: FONT.small, color: '#555' });
       return y - view.y + st.scroll + 20;
     }
 
-    function drawPage(ctx, view, page, papi) {
+    const SERIF = '12px "Times New Roman", Georgia, serif';
+    let curView = null;   // viewport of the page being drawn, for off-screen culling
+
+    // Text layout is memoised per block: a fetched page can be a few hundred
+    // blocks and this canvas is redrawn every frame.
+    const layouts = new WeakMap();
+    function memo(block, key, build) {
+      let e = layouts.get(block);
+      if (!e || e.key !== key) { e = { key, data: build() }; layouts.set(block, e); }
+      return e.data;
+    }
+
+    function wrapMemo(ctx, block, str, maxW, font) {
+      return memo(block, `w|${maxW}|${font}|${str.length}`, () => {
+        ctx.font = font;
+        return wrap(ctx, str, maxW);
+      });
+    }
+
+    // stripping tags leaves gaps like "text [ 5 ] ." — glue those back up
+    const TIGHT_BEFORE = /^[.,;:!?)\]}%»…]/;
+    const TIGHT_AFTER = /[([{«]$/;
+
+    /** Word-positions for a run of styled spans: [{ text }, { text, href }]. */
+    function richLayout(ctx, spans, maxW, font) {
+      ctx.font = font;
+      const sp = ctx.measureText(' ').width;
+      const words = [];
+      let cx = 0, line = 0, prev = '';
+      for (const run of spans) {
+        for (const word of String(run.text).split(/\s+/)) {
+          if (!word) continue;
+          const ww = ctx.measureText(word).width;
+          const tight = TIGHT_BEFORE.test(word) || TIGHT_AFTER.test(prev);
+          prev = word;
+          if (tight && cx > 0) { /* no space */ }
+          else if (cx > 0 && cx + sp + ww > maxW) { cx = 0; line += 1; }
+          else if (cx > 0) cx += sp;
+          words.push({ text: word, x: cx, line, w: ww, href: run.href ?? null });
+          cx += ww;
+        }
+      }
+      return { words, lines: line + 1 };
+    }
+
+    /**
+     * Draw styled spans with word wrap, underlining and hit-testing the link
+     * runs as it goes. This is how a fetched page keeps its links inline
+     * instead of dumping them in a list at the bottom.
+     */
+    function drawRich(ctx, block, spans, x, y, maxW, { font = SERIF, color = '#000', lh = 15, pushLink }) {
+      const L = memo(block, `r|${maxW}|${font}`, () => richLayout(ctx, spans, maxW, font));
+      const top = curView ? curView.y - lh : -1e9;
+      const bot = curView ? curView.y + curView.h : 1e9;
+      for (const w of L.words) {
+        const wy = y + w.line * lh;
+        if (wy < top || wy > bot) continue;
+        const col = w.href ? (st.visited.has(w.href) ? VISITED : LINK) : color;
+        text(ctx, w.text, x + w.x, wy, { font, color: col });
+        if (w.href) {
+          fill(ctx, x + w.x, wy + lh - 3, w.w, 1, col);
+          pushLink?.(w.href, x + w.x, wy, w.w, lh - 2);
+        }
+      }
+      return y + L.lines * lh;
+    }
+
+    function drawPage(ctx, view, page, papi, limit = Infinity) {
       const M = 12;
       const x = view.x + M;
       const maxW = view.w - M * 2;
       let y = view.y + 10 - st.scroll;
       const fg = page.fg ?? '#000000';
       st.links = [];
+      curView = view;
 
       const pushLink = (href, lx, ly, lw, lh, label) => {
         st.links.push({ href, x: lx, y: ly, w: lw, h: lh, label });
       };
 
+      let drawn = 0;
       for (const b of page.blocks) {
+        if (drawn >= limit) break;
+        drawn += 1;
         switch (b.t) {
           case 'h1':
             ctx.font = 'bold 19px "Times New Roman", Georgia, serif';
@@ -703,11 +1146,18 @@ export const browser = {
             y += 20;
             break;
           case 'p': {
-            ctx.font = '12px "Times New Roman", Georgia, serif';
-            wrap(ctx, b.text, maxW).forEach((l) => {
-              text(ctx, l, x, y, { font: '12px "Times New Roman", Georgia, serif', color: fg });
-              y += 15;
-            });
+            const px = x + (b.indent ? 16 : 0);
+            const pw = maxW - (b.indent ? 20 : 0);
+            const y0 = y;
+            if (b.spans) {
+              y = drawRich(ctx, b, b.spans, px, y, pw, { color: fg, pushLink });
+            } else {
+              wrapMemo(ctx, b, b.text, pw, SERIF).forEach((l) => {
+                if (y > view.y - 16 && y < view.y + view.h) text(ctx, l, px, y, { font: SERIF, color: fg });
+                y += 15;
+              });
+            }
+            if (b.indent) fill(ctx, x + 4, y0, 2, Math.max(4, y - y0 - 2), '#a0a0a0');
             y += 6;
             break;
           }
@@ -728,14 +1178,19 @@ export const browser = {
             y += b.h;
             break;
           case 'ul':
-            ctx.font = '12px "Times New Roman", Georgia, serif';
+            ctx.font = SERIF;
             b.items.forEach((it) => {
               ctx.fillStyle = fg;
               ctx.beginPath(); ctx.arc(x + 6, y + 6, 2.4, 0, Math.PI * 2); ctx.fill();
-              wrap(ctx, it, maxW - 20).forEach((l, i) => {
-                text(ctx, l, x + 16, y, { font: '12px "Times New Roman", Georgia, serif', color: fg });
-                y += 15;
-              });
+              if (it && it.spans) {
+                y = drawRich(ctx, it, it.spans, x + 16, y, maxW - 20, { color: fg, pushLink });
+              } else {
+                ctx.font = SERIF;
+                wrap(ctx, it.text ?? it, maxW - 20).forEach((l) => {
+                  text(ctx, l, x + 16, y, { font: SERIF, color: fg });
+                  y += 15;
+                });
+              }
             });
             y += 6;
             break;
@@ -770,9 +1225,68 @@ export const browser = {
             break;
           }
           case 'img': {
+            if (!b.draw) {
+              // fetched pages never carry bitmaps — draw IE's broken-image box
+              const iw = Math.min(maxW, 240), ih = 30;
+              fill(ctx, x, y, iw, ih, '#ffffff');
+              ctx.strokeStyle = '#909090'; ctx.lineWidth = 1;
+              ctx.strokeRect(x + 0.5, y + 0.5, iw - 1, ih - 1);
+              fill(ctx, x + 6, y + 8, 13, 15, '#f0f0f0');
+              ctx.strokeStyle = '#606060'; ctx.strokeRect(x + 6.5, y + 8.5, 12, 14);
+              ctx.strokeStyle = '#c02020'; ctx.lineWidth = 1.6;
+              ctx.beginPath();
+              ctx.moveTo(x + 9, y + 11); ctx.lineTo(x + 16, y + 20);
+              ctx.moveTo(x + 16, y + 11); ctx.lineTo(x + 9, y + 20);
+              ctx.stroke();
+              ctx.save();
+              ctx.beginPath(); ctx.rect(x + 24, y, iw - 28, ih); ctx.clip();
+              text(ctx, b.alt || '(image)', x + 26, y + 15, {
+                baseline: 'middle', font: FONT.small, color: '#606060',
+              });
+              ctx.restore();
+              y += ih + 6;
+              break;
+            }
             const iw = b.w ?? maxW, ih = b.h ?? 60;
             b.draw(ctx, x, y, iw, ih, st.t);
             y += ih + 6;
+            break;
+          }
+          case 'pre': {
+            const lines = b.lines ?? [];
+            const h = lines.length * 13 + 8;
+            fill(ctx, x, y, maxW, h, '#f4f4f4');
+            ctx.strokeStyle = '#a0a0a0'; ctx.lineWidth = 1;
+            ctx.strokeRect(x + 0.5, y + 0.5, maxW - 1, h - 1);
+            ctx.save();
+            ctx.beginPath(); ctx.rect(x, y, maxW, h); ctx.clip();
+            lines.forEach((l, i) => {
+              text(ctx, l, x + 5, y + 5 + i * 13, { font: FONT.monoSmall, color: '#202020' });
+            });
+            ctx.restore();
+            y += h + 8;
+            break;
+          }
+          case 'trow': {
+            const cells = b.cells ?? [];
+            const n = Math.max(1, cells.length);
+            const cw = maxW / n;
+            ctx.font = b.head ? FONT.uiBold : FONT.ui;
+            const wrapped = cells.map((c) => wrap(ctx, c, cw - 8));
+            const rows = Math.max(1, ...wrapped.map((w) => w.length));
+            const h = rows * 13 + 6;
+            fill(ctx, x, y, maxW, h, b.head ? '#e4e4e4' : '#fafafa');
+            ctx.strokeStyle = '#b0b0b0'; ctx.lineWidth = 1;
+            ctx.strokeRect(x + 0.5, y + 0.5, maxW - 1, h - 1);
+            wrapped.forEach((ls, i) => {
+              if (i > 0) fill(ctx, x + i * cw, y + 1, 1, h - 2, '#b0b0b0');
+              ls.forEach((l, j) => {
+                text(ctx, l, x + i * cw + 4, y + 3 + j * 13, {
+                  font: b.head ? FONT.uiBold : FONT.ui, color: fg,
+                });
+              });
+            });
+            y += h + 2;
             break;
           }
           case 'row': {
@@ -930,15 +1444,30 @@ export const browser = {
       for (const r of st.btnRects ?? []) {
         if (ax >= r.x && ax <= r.x + r.w && ay >= r.y && ay <= r.y + r.h) {
           if (!r.on) return;
+          st.addrFocus = false;
           if (r.label === 'Back') back(papi);
           else if (r.label === 'Forward') forward(papi);
-          else if (r.label === 'Stop') { st.loading = 0; st.pending = null; st.status = 'Stopped'; }
-          else if (r.label === 'Refresh') navigate(st.pageKey, papi);
+          else if (r.label === 'Stop') { stop(); st.status = 'Stopped'; }
+          else if (r.label === 'Refresh') refresh(papi);
           else if (r.label === 'Home') navigate('home', papi);
           papi.sound('click');
           return;
         }
       }
+
+      // address bar: click to type in it
+      const ar = st.addrRect;
+      if (ar && ax >= ar.x && ax <= ar.x + ar.w + 18 && ay >= ar.y && ay <= ar.y + ar.h) {
+        if (!st.addrFocus) focusAddress();
+        else {
+          // second click drops the selection and puts a caret roughly where you clicked
+          st.addrSel = false;
+          st.addrCaret = st.addr.length;
+        }
+        papi.sound('click');
+        return;
+      }
+      st.addrFocus = false;
 
       // scrollbar
       const SB = 15;
@@ -956,26 +1485,22 @@ export const browser = {
         }
       }
 
-      // offline connect button
-      if (st.offlineFor && st.connectBtn) {
-        const r = st.connectBtn;
-        if (ax >= r.x && ax <= r.x + r.w && ay >= r.y && ay <= r.y + r.h) {
-          papi.open('dialup');
-          return;
-        }
-      }
+      const hitRect = (r) => r && ax >= r.x && ax <= r.x + r.w && ay >= r.y && ay <= r.y + r.h;
+
+      // error page buttons
+      if (st.err && hitRect(st.connectBtn)) { papi.open('dialup'); return; }
+      if (st.err && hitRect(st.retryBtn)) { refresh(papi); return; }
 
       // form widgets
-      const hitRect = (r) => r && ax >= r.x && ax <= r.x + r.w && ay >= r.y && ay <= r.y + r.h;
       if (hitRect(st.nameField)) { st.guest.field = 0; return; }
       if (hitRect(st.msgField)) { st.guest.field = 1; return; }
       if (hitRect(st.signBtn)) { submitGuest(papi); return; }
       if (hitRect(st.searchBtn)) { papi.sound('click'); navigate('altavista', papi); return; }
 
-      // links
+      // links — local page keys and absolute URLs both live in here
       const link = (st.links ?? []).find((l) =>
         ax >= l.x && ax <= l.x + l.w && ay >= l.y - 2 && ay <= l.y + l.h);
-      if (link) navigate(link.href, papi);
+      if (link) follow(link.href, papi);
     }
 
     return app;

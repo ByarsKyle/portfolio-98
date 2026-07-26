@@ -19,20 +19,28 @@ loads, in about four seconds.
 | `Mouse` | look |
 | `Shift` | run |
 | `E` | interact — sit at the computer, pet the dog, toggle the lamp, lie down |
-| `Esc` | stand up / release the cursor |
+| `Alt`+`Enter` | full screen, once you're sitting at the machine |
+| `Esc` | leave full screen / stand up / release the cursor |
 
 Walk up to the monitor and press **E**. The camera dollies to 25 cm from the
 tube until the screen fills the frame — it is not an overlay, you are simply
 close to the mesh. Everything you then click is the same curved, scanlined,
 glowing surface you were looking at from across the room.
 
+Once you're sitting there, **Full Screen** in the corner (or `Alt`+`Enter`,
+which is what it did to a DOS box in 1998) blows the machine up to fill the
+window. Still not an overlay: the same canvas goes through the same CRT shader,
+just on a flat quad with the barrel distortion switched off, letterboxed to 4:3.
+
 Inside the machine: a BIOS POST, the Windows 98 boot splash, a desktop with a
 real window manager, Internet Explorer (which needs a dial-up connection
-first — open **Dial-Up Networking** and hit Connect), Minesweeper, Snake,
-Notepad, Paint, Media Player, an MS-DOS prompt, a Recycle Bin with some
-regrets in it, and a screensaver if you leave it alone for a while.
+first — open **Dial-Up Networking** and hit Connect), Outlook Express, a
+password vault, Minesweeper, Snake, Notepad, Paint, Media Player, an MS-DOS
+prompt, a Recycle Bin with some regrets in it, and a screensaver if you leave
+it alone for a while.
 
-Try `Ctrl+Alt+Delete`. Try typing `HELP` at the DOS prompt.
+Try `Ctrl+Alt+Delete`. Try typing `HELP` at the DOS prompt. Try typing a real
+address into Internet Explorer.
 
 ---
 
@@ -90,6 +98,71 @@ The site inside Internet Explorer lives in one object at the top of
 `src/os/apps/browser.js`. If you fork this to make it your own portfolio,
 that's the only thing you need to edit.
 
+### The web, for real — `api/surf.js`
+
+Internet Explorer is not limited to the hand-written 1998 pages. Type a real
+address into the address bar and it fetches it.
+
+It cannot do that from the page — CORS — so there is one Vercel serverless
+function behind it. `/api/surf` takes a URL, resolves and validates the host
+(and every redirect hop) against loopback, RFC1918, link-local, CGNAT and the
+cloud metadata address, downloads up to 2 MB of `text/html` or `text/plain`
+inside an 8 second budget, throws away the scripts, styles, frames and forms,
+and hands back the same block vocabulary the local pages are written in. Links
+are resolved absolute, so clicking one on a fetched page fetches that too.
+Images are deliberately never proxied — the renderer is a canvas — so every
+`<img>` becomes a broken-image box with its alt text, which is exactly what the
+web looked like on a slow line anyway.
+
+Then it is deliberately slowed down. The page arrives block by block at roughly
+5 KB/s with a real byte counter in the status bar and the real progress blocks
+filling, floored at half a second so it never feels instant and **capped at 3.5
+seconds** so it never becomes a joke at your expense. Pages you have already
+visited come back out of the cache fast, the way they did.
+
+`vite.config.js` carries a dev-only middleware that runs the same handler under
+`npm run dev`, so local development browses the real web too. Full contract and
+limits in [`api/README.md`](api/README.md).
+
+### Mail and the vault — `src/net/`, `src/os/apps/mail.js`, `src/os/apps/vault.js`
+
+Outlook Express and Password Keeper are not props. They are real clients for
+the [Personal OS](https://github.com/ByarsKyle) backend — the same Convex
+deployment, the same Clerk instance, the same data.
+
+Sign-in happens inside the machine: a Win98 dialog collects an address and a
+password and drives Clerk headlessly, so you never leave the CRT. (If the
+account needs something a canvas can't collect — an emailed code, a second
+factor — it says so and hands off to Clerk's own modal.) Access is decided
+server-side by a hard-coded address allowlist in `convex/users.ts`, so a
+stranger who finds the login window and has a Clerk account of their own still
+gets an empty mailbox and no vault.
+
+**Outlook Express** is a three-pane reader: folder tree with a live unread
+count, message list, preview pane. Threads and unread counts arrive over Convex
+subscriptions, so new mail appears without a refresh. Archive, trash, star,
+mark-read, search, and compose with reply/reply-all/forward all write back —
+including the seven-second "Message will be sent in N seconds — Undo" strip,
+which is the real undo window, not a decoration.
+
+**Password Keeper** is genuinely zero-knowledge. `src/os/vaultcrypto.js` is a
+straight port of Personal OS's `src/lib/vault/crypto.ts` — PBKDF2-SHA256 at
+600,000 iterations derives a wrapping key from the master password, which
+unwraps a 256-bit AES-GCM data key, which decrypts each item. All of that
+happens in the browser; the server only ever holds base64 ciphertext, and a
+wrong master password is caught by the GCM auth tag rather than by any check we
+wrote. The master password and the derived key never touch `localStorage`,
+`sessionStorage` or the network. TOTP codes are generated locally and match the
+RFC 6238 test vectors.
+
+`src/net/backend.js` is the only file in the project that knows any of this
+exists. Clerk and the Convex client are dynamically imported the first time an
+app asks to connect, so walking around the room never downloads them.
+
+Configuration is two public values in `.env` — a Convex deployment URL and a
+Clerk *publishable* key. Both are designed to ship in browser code and neither
+grants access on its own. Without them, both apps say so and do nothing.
+
 ### The sound — `src/core/audio.js`
 
 Synthesised with WebAudio at runtime. Room tone, the flyback whine of the CRT
@@ -105,9 +178,21 @@ the right timings. It is annoying on purpose.
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173
+npm run dev        # http://localhost:5173 — /api/surf works here too
 npm run build      # → dist/
 ```
+
+Mail and the vault need two public values, already in `.env`:
+
+```
+VITE_CONVEX_URL=https://<deployment>.convex.cloud
+VITE_CLERK_PUBLISHABLE_KEY=pk_...
+```
+
+Vite inlines them into the bundle, which is fine — they are publishable
+identifiers, not secrets, and the address allowlist on the server is what
+actually gates access. Leave them unset and both apps degrade to a polite
+"no server configured" panel.
 
 There is also a screenshot harness used while building this, which drives the
 scene in headless Chrome and grabs a set of views:
@@ -122,5 +207,9 @@ Best on a desktop with a keyboard and mouse. It wants WebGL2 and roughly a
 2015-or-later GPU; the post chain falls back to an 8-bit framebuffer on
 drivers without `OES_texture_half_float_linear`.
 
-Everything on the little website inside the computer is placeholder copy —
-swap it for your own.
+The hand-written pages inside Internet Explorer are placeholder copy — swap
+them for your own. Typing a real address still fetches the real thing.
+
+The clerk chunk is large (~570 KB gzipped). It is dynamically imported, so it
+is only downloaded if somebody actually opens Mail or the vault; the room and
+everything else in the machine never touch it.
