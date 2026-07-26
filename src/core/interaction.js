@@ -46,6 +46,7 @@ export class Interaction {
     this.promptLabel = el('prompt-label');
     this.exitHint = el('crt-exit');
     this.fsButton = el('crt-fullscreen');
+    this.dispButton = el('display-fullscreen');
 
     this.fullscreen = false;
     this.fs = null;               // built lazily the first time you go fullscreen
@@ -135,6 +136,7 @@ export class Interaction {
       this.grade.uniforms.uGrain.value = 0.010;
       this.renderPass.scene = this.fs.stage;
       this.renderPass.camera = this.fs.cam;
+      this.toggleDisplayFullscreen(true);
     } else {
       this.renderPass.scene = this.scene;
       this.renderPass.camera = this.camera;
@@ -150,7 +152,41 @@ export class Interaction {
     this.audio.play('click');
   }
 
+  // ── the browser's own fullscreen ───────────────────────────
+  // Separate from the CRT mode above: that one fills the *page* with the
+  // machine, this one fills the *display* with the page. They compose — going
+  // full screen at the desk asks for both, because if you want the computer to
+  // be everything you almost certainly don't want a URL bar over it.
+  get displayFullscreen() {
+    return Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+  }
+
+  async toggleDisplayFullscreen(on = !this.displayFullscreen) {
+    const root = document.documentElement;
+    try {
+      if (on && !this.displayFullscreen) {
+        await (root.requestFullscreen?.({ navigationUI: 'hide' })
+          ?? root.webkitRequestFullscreen?.());
+      } else if (!on && this.displayFullscreen) {
+        await (document.exitFullscreen?.() ?? document.webkitExitFullscreen?.());
+      }
+    } catch {
+      // denied, unsupported, or not a user gesture — never fatal, and the
+      // in-page CRT fullscreen works on its own regardless
+    }
+    this._syncFullscreenUI();
+  }
+
   _syncFullscreenUI() {
+    const disp = this.displayFullscreen;
+
+    const d = this.dispButton;
+    if (d) {
+      d.classList.toggle('on', disp);
+      d.title = disp ? 'Leave fullscreen (F)' : 'Fullscreen (F)';
+      d.setAttribute('aria-pressed', String(disp));
+    }
+
     const b = this.fsButton;
     if (!b) return;
     const seated = this.mode === 'inCRT';
@@ -210,7 +246,16 @@ export class Interaction {
           e.preventDefault();
           return;
         }
-        if (this.mode === 'inCRT' || this.mode === 'inBed') { this._exit(); return; }
+        // NOT inCRT: once you're sitting at the machine every key belongs to
+        // the machine, and stealing E meant you could not type the letter e
+        // into Notepad, the address bar or a password field. Esc is the way out.
+        if (this.mode === 'inBed') { this._exit(); return; }
+      }
+      // toggle the display while walking around; inCRT it would type an f
+      if (e.code === 'KeyF' && !e.repeat && this.mode === 'walk' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        this.toggleDisplayFullscreen();
+        e.preventDefault();
+        return;
       }
       // Alt+Enter — the same thing it did to a DOS box in 1998
       if (e.code === 'Enter' && e.altKey && this.mode === 'inCRT') {
@@ -270,16 +315,22 @@ export class Interaction {
     addEventListener('contextmenu', this._onCtx);
     addEventListener('resize', this._onResize);
 
-    if (this.fsButton) {
-      this.fsButton.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.audio.resume();
-        this.toggleFullscreen();
-      });
-      // the button lives over the screen; don't let its clicks reach the OS
-      this.fsButton.addEventListener('mousedown', (e) => e.stopPropagation());
-      this.fsButton.addEventListener('mouseup', (e) => e.stopPropagation());
-    }
+    // the browser may drop out of fullscreen on its own (Esc, window manager),
+    // so the buttons follow the document rather than our own bookkeeping
+    this._onFsChange = () => this._syncFullscreenUI();
+    document.addEventListener('fullscreenchange', this._onFsChange);
+    document.addEventListener('webkitfullscreenchange', this._onFsChange);
+
+    // both buttons sit over the screen; their clicks must not reach the OS
+    const claim = (node, run) => {
+      if (!node) return;
+      node.addEventListener('click', (e) => { e.stopPropagation(); this.audio.resume(); run(); });
+      node.addEventListener('mousedown', (e) => e.stopPropagation());
+      node.addEventListener('mouseup', (e) => e.stopPropagation());
+    };
+    claim(this.fsButton, () => this.toggleFullscreen());
+    claim(this.dispButton, () => this.toggleDisplayFullscreen());
+    this._syncFullscreenUI();
 
     // the OS asks us for sounds
     this.os.state.sound = (name, opts) => this.audio.play(name, opts);
@@ -493,5 +544,7 @@ export class Interaction {
     removeEventListener('wheel', this._onWheel);
     removeEventListener('contextmenu', this._onCtx);
     removeEventListener('resize', this._onResize);
+    document.removeEventListener('fullscreenchange', this._onFsChange);
+    document.removeEventListener('webkitfullscreenchange', this._onFsChange);
   }
 }

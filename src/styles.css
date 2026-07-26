@@ -107,6 +107,35 @@ html, body {
 #crt-exit.gone { opacity: 0; }
 #crt-exit b { color: rgba(200,220,255,.7); }
 
+/* ── display fullscreen, top right, always reachable ──── */
+#display-fullscreen {
+  position: fixed; top: 14px; right: 14px; z-index: 28;
+  display: grid; place-items: center;
+  width: 30px; height: 30px; padding: 0;
+  color: rgba(240, 226, 206, .5);
+  background: rgba(12, 9, 6, .5);
+  border: 1px solid rgba(255, 194, 122, .16); border-radius: 4px;
+  backdrop-filter: blur(4px); cursor: pointer;
+  transition: color .18s ease, border-color .18s ease, background .18s ease, opacity .3s ease;
+}
+#display-fullscreen:hover {
+  color: var(--amber);
+  border-color: rgba(255, 194, 122, .45);
+  background: rgba(20, 15, 9, .78);
+}
+#display-fullscreen svg {
+  width: 15px; height: 15px;
+  fill: none; stroke: currentColor; stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+/* the arrows point outward to expand, inward to contract */
+#display-fullscreen .in { display: none; }
+#display-fullscreen.on .out { display: none; }
+#display-fullscreen.on .in { display: inline; }
+/* while the pointer is captured it can't be clicked anyway — get out of the way */
+body.locked #display-fullscreen { opacity: .14; }
+body.locked #display-fullscreen:hover { opacity: 1; }
+
 /* ── the monitor's full-screen control ────────────────── */
 #crt-fullscreen {
   position: fixed; right: 16px; bottom: 14px; z-index: 27;

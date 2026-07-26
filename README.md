@@ -19,8 +19,12 @@ loads, in about four seconds.
 | `Mouse` | look |
 | `Shift` | run |
 | `E` | interact — sit at the computer, pet the dog, toggle the lamp, lie down |
-| `Alt`+`Enter` | full screen, once you're sitting at the machine |
+| `F` | fullscreen (or the button in the top right) |
+| `Alt`+`Enter` | fill the screen with the computer, once you're sitting at it |
 | `Esc` | leave full screen / stand up / release the cursor |
+
+Once you sit down at the machine, every key belongs to the machine — including
+`E`. `Esc` is how you get up.
 
 Walk up to the monitor and press **E**. The camera dollies to 25 cm from the
 tube until the screen fills the frame — it is not an overlay, you are simply
@@ -31,6 +35,8 @@ Once you're sitting there, **Full Screen** in the corner (or `Alt`+`Enter`,
 which is what it did to a DOS box in 1998) blows the machine up to fill the
 window. Still not an overlay: the same canvas goes through the same CRT shader,
 just on a flat quad with the barrel distortion switched off, letterboxed to 4:3.
+It asks the browser for real fullscreen at the same time, because if you want
+the computer to be everything you probably don't want a URL bar over it.
 
 Inside the machine: a BIOS POST, the Windows 98 boot splash, a desktop with a
 real window manager, Internet Explorer (which needs a dial-up connection

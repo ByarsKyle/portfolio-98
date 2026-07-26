@@ -36,6 +36,7 @@
         <span><b>Mouse</b> look</span>
         <span><b>Shift</b> run</span>
         <span><b>E</b> interact</span>
+        <span><b>F</b> fullscreen</span>
         <span><b>Esc</b> release cursor</span>
       </div>
       <button id="start-btn">Enter the room</button>
@@ -49,6 +50,14 @@
     <div id="prompt" hidden><b>E</b><span id="prompt-label">Use</span></div>
     <div id="hint">WASD move · Shift run · E interact</div>
   </div>
+
+  <!-- fills the display with the page; available everywhere -->
+  <button id="display-fullscreen" type="button" title="Fullscreen (F)" aria-label="Toggle fullscreen" hidden>
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path class="out" d="M1.6 5.6V1.6h4M10.4 1.6h4v4M14.4 10.4v4h-4M5.6 14.4h-4v-4" />
+      <path class="in" d="M5.6 1.6v4h-4M14.4 5.6h-4v-4M10.4 14.4v-4h4M1.6 10.4h4v4" />
+    </svg>
+  </button>
 
   <!-- shown once the camera has settled at the monitor -->
   <div id="crt-exit" hidden>Press <b>Esc</b> to step away from the computer</div>

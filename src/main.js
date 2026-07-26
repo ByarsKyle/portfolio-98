@@ -104,6 +104,9 @@ async function boot() {
   player.onStep = (running) => audio.footstep(running);
   player.onLockChange = (locked) => {
     if (!locked && !interaction.inCRT) el('hint')?.classList.remove('gone');
+    // the fullscreen button fades out while the cursor is captured, since it
+    // cannot be clicked then anyway
+    document.body.classList.toggle('locked', locked);
   };
 
   // Warm the shader cache by rendering one throwaway frame. (renderer.compile()
@@ -118,6 +121,8 @@ async function boot() {
   loader.classList.add('gone');
   setTimeout(() => { loader.hidden = true; }, 900);
   el('start').hidden = false;
+  // reachable from the title card onward, including before you enter the room
+  el('display-fullscreen').hidden = false;
 
   // debug hook — used by the screenshot harness and handy in the console
   window.__room = {
