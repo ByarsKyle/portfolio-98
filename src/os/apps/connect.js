@@ -24,10 +24,12 @@ export function createConnectPanel({ blurb, icon = 'key' }) {
   const st = {
     email: '',
     password: '',
+    code: '',
     field: 0,
     busy: false,
     message: null,
     needsHostedUI: false,
+    verify: null,          // set when Clerk wants a verification code
     backend: backend.getStatus(),
     caret: 0,
     rects: {},
@@ -36,15 +38,54 @@ export function createConnectPanel({ blurb, icon = 'key' }) {
   // keep the panel honest about the connection without polling
   const unsubscribe = backend.onChange((s) => {
     st.backend = s;
-    if (s.status === 'online') { st.password = ''; st.message = null; }
+    if (s.status === 'online') {
+      st.password = ''; st.code = ''; st.verify = null; st.message = null;
+    }
     if (s.status === 'error' && s.error) st.message = s.error;
   });
 
   /** true when the app above should draw itself instead of this panel */
   const connected = () => st.backend.status === 'online';
 
+  /** Every sign-in call answers in the same shape, so handle it in one place. */
+  function handle(res, api) {
+    st.busy = false;
+    if (res.ok) {
+      st.password = ''; st.code = ''; st.verify = null; st.message = null;
+      api?.sound('ding');
+      return;
+    }
+    if (res.verify) {
+      // Clerk wants a code. Keep the password out of memory from here on.
+      const fresh = !st.verify;
+      st.verify = res.verify;
+      st.password = '';
+      if (fresh) { st.code = ''; st.field = 0; }
+      st.message = res.message ?? null;
+      api?.sound(fresh ? 'ding' : 'error');
+      return;
+    }
+    st.verify = null;
+    st.message = res.message ?? 'Sign in failed.';
+    st.needsHostedUI = Boolean(res.needsHostedUI);
+    api?.sound('error');
+  }
+
   function submit(api) {
     if (st.busy) return;
+
+    if (st.verify) {
+      if (!st.code.trim()) {
+        st.message = 'Enter the code.';
+        api?.sound('error');
+        return;
+      }
+      st.busy = true;
+      st.message = 'Checking the code...';
+      backend.submitCode(st.code).then((res) => handle(res, api));
+      return;
+    }
+
     if (!st.email.trim() || !st.password) {
       st.message = 'Enter your e-mail address and password.';
       api?.sound('error');
@@ -53,18 +94,25 @@ export function createConnectPanel({ blurb, icon = 'key' }) {
     st.busy = true;
     st.message = 'Connecting to server...';
     st.needsHostedUI = false;
-    backend.signIn(st.email, st.password).then((res) => {
+    backend.signIn(st.email, st.password).then((res) => handle(res, api));
+  }
+
+  function resend(api) {
+    if (st.busy || !st.verify) return;
+    st.busy = true;
+    st.message = 'Sending another code...';
+    backend.resendCode().then((res) => {
       st.busy = false;
-      if (res.ok) {
-        st.password = '';
-        st.message = null;
-        api?.sound('ding');
-        return;
-      }
-      st.message = res.message ?? 'Sign in failed.';
-      st.needsHostedUI = Boolean(res.needsHostedUI);
-      api?.sound('error');
+      st.message = res.message ?? null;
+      api?.sound(res.ok ? 'ding' : 'error');
     });
+  }
+
+  function startOver(api) {
+    backend.cancelSignIn();
+    st.verify = null; st.code = ''; st.password = '';
+    st.field = 1; st.message = null; st.busy = false;
+    api?.sound('click');
   }
 
   function draw(ctx, r, win, api) {
@@ -101,36 +149,71 @@ export function createConnectPanel({ blurb, icon = 'key' }) {
       return;
     }
 
-    // ── credentials
-    groupBox(ctx, x, y, W, 92, 'Account');
-    let fy = y + 20;
-    FIELDS.forEach((name, i) => {
-      const label = name === 'email' ? 'E-mail:' : 'Password:';
-      text(ctx, label, x + 10, fy + 7, { baseline: 'middle', font: FONT.ui });
-      const fx = x + 72, fw = W - 82, fh = 18;
+    // one text field, drawn the same wherever it appears
+    const field = (name, label, fx, fy, fw, index, mask = false) => {
+      const fh = 18;
+      text(ctx, label, x + 10, fy + fh / 2, { baseline: 'middle', font: FONT.ui });
       fill(ctx, fx, fy, fw, fh, st.busy ? C.face : C.white);
       bevelIn(ctx, fx, fy, fw, fh);
       const raw = st[name];
-      const shown = name === 'password' ? '*'.repeat(raw.length) : raw;
+      const shown = mask ? '*'.repeat(raw.length) : raw;
       ctx.save();
       ctx.beginPath(); ctx.rect(fx + 2, fy, fw - 4, fh); ctx.clip();
       text(ctx, shown, fx + 4, fy + fh / 2, { baseline: 'middle', font: FONT.ui });
-      if (st.field === i && !st.busy && Math.floor(st.caret * 2) % 2 === 0) {
+      if (st.field === index && !st.busy && Math.floor(st.caret * 2) % 2 === 0) {
         ctx.font = FONT.ui;
         fill(ctx, fx + 5 + ctx.measureText(shown).width, fy + 3, 1, 12, '#000');
       }
       ctx.restore();
-      st.rects[name] = { x: fx - r.x, y: fy - r.y, w: fw, h: fh, field: i };
-      fy += 26;
-    });
+      st.rects[name] = { x: fx - r.x, y: fy - r.y, w: fw, h: fh, field: index };
+    };
 
-    // ── actions
-    const by = y + 68;
-    const bw = 74, bh = 21;
-    button(ctx, x + W - bw - 8, by, bw, bh, st.busy ? 'Wait...' : 'Connect',
-      { disabled: st.busy, focus: !st.busy });
-    st.rects.connect = { x: x + W - bw - 8 - r.x, y: by - r.y, w: bw, h: bh };
-    y += 104;
+    if (st.verify) {
+      // ── step two: Clerk wants a verification code
+      const v = st.verify;
+      const where = v.hint ? ` to ${v.hint}` : '';
+      const blurb2 = v.sent
+        ? `A verification code was sent by ${v.label}${where}. Type it in below.`
+        : `Open your ${v.label} and type the current code in below.`;
+      ctx.font = FONT.ui;
+      const lines = wrap(ctx, blurb2, W - 20);
+      const boxH = 44 + lines.length * 13;
+      groupBox(ctx, x, y, W, boxH, 'Verification');
+      let ly = y + 18;
+      lines.forEach((ln) => { text(ctx, ln, x + 10, ly, { font: FONT.ui }); ly += 13; });
+      field('code', 'Code:', x + 72, ly + 4, Math.min(120, W - 82), 0);
+
+      const bw = 74, bh = 21;
+      let bx = x + W - bw - 8;
+      const by = y + boxH + 8;
+      button(ctx, bx, by, bw, bh, st.busy ? 'Wait...' : 'Verify',
+        { disabled: st.busy, focus: !st.busy });
+      st.rects.connect = { x: bx - r.x, y: by - r.y, w: bw, h: bh };
+      if (v.sent) {
+        bx -= 82;
+        button(ctx, bx, by, 74, bh, 'Resend', { disabled: st.busy });
+        st.rects.resend = { x: bx - r.x, y: by - r.y, w: 74, h: bh };
+      }
+      button(ctx, x, by, 74, bh, 'Start over', { disabled: st.busy });
+      st.rects.startover = { x: x - r.x, y: by - r.y, w: 74, h: bh };
+      y = by + bh + 12;
+    } else {
+      // ── step one: credentials
+      groupBox(ctx, x, y, W, 92, 'Account');
+      let fy = y + 20;
+      FIELDS.forEach((name, i) => {
+        field(name, name === 'email' ? 'E-mail:' : 'Password:',
+          x + 72, fy, W - 82, i, name === 'password');
+        fy += 26;
+      });
+
+      const by = y + 68;
+      const bw = 74, bh = 21;
+      button(ctx, x + W - bw - 8, by, bw, bh, st.busy ? 'Wait...' : 'Connect',
+        { disabled: st.busy, focus: !st.busy });
+      st.rects.connect = { x: x + W - bw - 8 - r.x, y: by - r.y, w: bw, h: bh };
+      y += 104;
+    }
 
     // ── status line
     if (st.message) {
@@ -141,9 +224,10 @@ export function createConnectPanel({ blurb, icon = 'key' }) {
       y += wrap(ctx, st.message, W).length * 13 + 6;
     }
 
-    // Clerk's own modal handles anything a canvas can't: emailed codes,
-    // second factors, OAuth. Only offered once we know we need it.
-    if (st.needsHostedUI) {
+    // Clerk's own modal handles anything a canvas can't, and it is also the
+    // guaranteed way through if this dialog's own code flow goes wrong — so it
+    // stays reachable for as long as a verification is outstanding.
+    if (st.needsHostedUI || st.verify) {
       const hw = 150;
       button(ctx, x, y, hw, 21, 'Other sign-in options...');
       st.rects.hosted = { x: x - r.x, y: y - r.y, w: hw, h: 21 };
@@ -154,22 +238,28 @@ export function createConnectPanel({ blurb, icon = 'key' }) {
       x, r.y + r.h - 14, { font: FONT.small, color: '#707070' });
   }
 
+  /** Whichever fields the current step is showing. */
+  const activeFields = () => (st.verify ? ['code'] : FIELDS);
+
   function mouse(type, mx, my, btn, win, api) {
     if (type !== 'down' && type !== 'dblclick') return;
     const hit = (rect) => rect && mx >= rect.x && mx <= rect.x + rect.w && my >= rect.y && my <= rect.y + rect.h;
 
-    for (const name of FIELDS) {
+    for (const name of activeFields()) {
       if (hit(st.rects[name])) { st.field = st.rects[name].field; st.caret = 0; return; }
     }
     if (hit(st.rects.connect)) { submit(api); return; }
+    if (hit(st.rects.resend)) { resend(api); return; }
+    if (hit(st.rects.startover)) { startOver(api); return; }
     if (hit(st.rects.hosted)) { backend.openHostedSignIn(); return; }
   }
 
   function key(e, win, api) {
     if (st.busy) return;
-    if (e.key === 'Tab') { st.field = (st.field + 1) % FIELDS.length; st.caret = 0; return; }
+    const fields = activeFields();
+    if (e.key === 'Tab') { st.field = (st.field + 1) % fields.length; st.caret = 0; return; }
     if (e.key === 'Enter') { submit(api); return; }
-    const name = FIELDS[st.field];
+    const name = fields[st.field] ?? fields[0];
     if (e.key === 'Backspace') { st[name] = st[name].slice(0, -1); st.caret = 0; return; }
     if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) { st[name] += e.key; st.caret = 0; }
   }

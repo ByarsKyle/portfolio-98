@@ -24,13 +24,15 @@ const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY ?? '';
 const JWT_TEMPLATE = 'convex';
 
 const state = {
-  status: 'offline',     // offline | connecting | signed-out | signing-in | online | error
+  status: 'offline',     // offline | connecting | signed-out | signing-in
+                         // | needs-code | online | error
   user: null,            // { email, name } once signed in
   error: null,
   clerk: null,
   convex: null,
   fnRef: null,           // makeFunctionReference, once convex is loaded
   loading: null,         // in-flight init promise
+  flow: null,            // half-finished sign-in awaiting a verification code
 };
 
 const listeners = new Set();
@@ -125,7 +127,9 @@ async function syncUser() {
   const clerk = state.clerk;
   if (!clerk?.session) {
     state.user = null;
-    setStatus('signed-out');
+    // Clerk fires its listener while a sign-in is half finished; don't let that
+    // knock the dialog back to the password box mid-verification.
+    if (!state.flow) setStatus('signed-out');
     return;
   }
   try {
@@ -146,38 +150,118 @@ async function syncUser() {
 }
 
 // ── sign in / out ──────────────────────────────────────────────
+// Signing in is a state machine, not a single call. Password is only ever the
+// first step: Clerk can come back asking for a second factor, or — the one that
+// actually bit us — `needs_client_trust`, its device-verification step, which
+// fires the first time a given browser is used and mails you a code. Both route
+// through the same second-factor machinery, so the dialog handles them the same
+// way instead of giving up and pointing at Clerk's own UI.
+
+/** Strategies that mean "we sent you something"; the rest you already have. */
+const SENT_TO_YOU = new Set(['email_code', 'phone_code']);
+
+/** Most convenient first. totp/backup_code need no prepare step. */
+const FACTOR_ORDER = ['email_code', 'phone_code', 'totp', 'backup_code'];
+
+const pickFactor = (factors) => {
+  const list = Array.isArray(factors) ? factors : [];
+  for (const strategy of FACTOR_ORDER) {
+    const hit = list.find((f) => f?.strategy === strategy);
+    if (hit) return hit;
+  }
+  return null;
+};
+
+const describeFactor = (factor) => ({
+  strategy: factor.strategy,
+  sent: SENT_TO_YOU.has(factor.strategy),
+  // Clerk masks these for us — k•••@outlook.com, +1 ••• ••• 1234
+  hint: factor.safeIdentifier ?? '',
+  label: {
+    email_code: 'e-mail',
+    phone_code: 'text message',
+    totp: 'authenticator app',
+    backup_code: 'backup code',
+  }[factor.strategy] ?? factor.strategy.replace(/_/g, ' '),
+});
+
+/** Hand off to Clerk's own modal, which can do anything we can't. */
+const bail = (message) => {
+  state.flow = null;
+  setStatus('signed-out', { error: message });
+  return { ok: false, needsHostedUI: true, message };
+};
+
 /**
- * Password sign-in, driven entirely from the Win98 dialog — no Clerk chrome.
- * If the instance wants something we can't collect from a canvas (an emailed
- * code, a second factor), we say so and hand off to Clerk's own modal rather
- * than pretending to support it.
- *
- * @returns {Promise<{ok: boolean, needsHostedUI?: boolean, message?: string}>}
+ * Look at where Clerk has got to and either finish, ask for a code, or give up.
+ * Every path through sign-in funnels through here.
+ */
+async function advance(res) {
+  switch (res.status) {
+    case 'complete':
+      state.flow = null;
+      await state.clerk.setActive({ session: res.createdSessionId });
+      await syncUser();
+      return state.status === 'online'
+        ? { ok: true }
+        : { ok: false, message: state.error ?? 'Signed in, but the server would not accept the account.' };
+
+    case 'needs_first_factor':
+      return askForCode(res, 'first');
+
+    // needs_client_trust is Clerk verifying an unrecognised device. It is not a
+    // second factor on the account, but it arrives through the same endpoints.
+    case 'needs_second_factor':
+    case 'needs_client_trust':
+      return askForCode(res, 'second');
+
+    case 'needs_new_password':
+      return bail('This account has to set a new password before it can sign in.');
+
+    default:
+      return bail(`Clerk asked for "${String(res.status).replace(/_/g, ' ')}", which this dialog cannot do.`);
+  }
+}
+
+async function askForCode(res, stage) {
+  const factor = pickFactor(stage === 'second' ? res.supportedSecondFactors : res.supportedFirstFactors);
+  if (!factor) return bail('This account needs a verification method this dialog cannot show.');
+
+  try {
+    if (SENT_TO_YOU.has(factor.strategy)) await sendCode(res, stage, factor);
+  } catch (err) {
+    return bail(describe(err));
+  }
+
+  state.flow = { res, stage, factor };
+  setStatus('needs-code');
+  return { ok: false, verify: describeFactor(factor) };
+}
+
+function sendCode(res, stage, factor) {
+  const body = { strategy: factor.strategy };
+  if (factor.emailAddressId) body.emailAddressId = factor.emailAddressId;
+  if (factor.phoneNumberId) body.phoneNumberId = factor.phoneNumberId;
+  return stage === 'second' ? res.prepareSecondFactor(body) : res.prepareFirstFactor(body);
+}
+
+/**
+ * Step one: identifier + password.
+ * @returns {Promise<{ok: boolean, verify?: object, needsHostedUI?: boolean, message?: string}>}
  */
 export async function signIn(email, password) {
   await connect();
   const clerk = state.clerk;
   if (!clerk) return { ok: false, message: state.error ?? 'Not connected.' };
 
+  state.flow = null;
   setStatus('signing-in');
   try {
     const attempt = await clerk.client.signIn.create({
       identifier: String(email).trim(),
       password,
     });
-
-    if (attempt.status !== 'complete') {
-      setStatus('signed-out');
-      return {
-        ok: false,
-        needsHostedUI: true,
-        message: `This account needs another step (${attempt.status.replace(/_/g, ' ')}).`,
-      };
-    }
-
-    await clerk.setActive({ session: attempt.createdSessionId });
-    await syncUser();
-    return { ok: state.status === 'online', message: state.error ?? undefined };
+    return await advance(attempt);
   } catch (err) {
     const message = describe(err);
     // strategy not enabled on this instance → the modal can still do it
@@ -185,6 +269,53 @@ export async function signIn(email, password) {
     setStatus('signed-out', { error: message });
     return { ok: false, needsHostedUI, message };
   }
+}
+
+/** Step two: whatever Clerk asked for in `verify`. */
+export async function submitCode(code) {
+  const flow = state.flow;
+  if (!flow) return { ok: false, message: 'That sign-in expired. Start again.' };
+
+  const trimmed = String(code ?? '').trim();
+  if (!trimmed) {
+    return { ok: false, verify: describeFactor(flow.factor), message: 'Enter the code.' };
+  }
+
+  setStatus('signing-in');
+  try {
+    const body = { strategy: flow.factor.strategy, code: trimmed };
+    const next = flow.stage === 'second'
+      ? await flow.res.attemptSecondFactor(body)
+      : await flow.res.attemptFirstFactor(body);
+    return await advance(next);
+  } catch (err) {
+    const message = describe(err);
+    // a wrong code is not the end of the flow — stay on this step
+    state.flow = flow;
+    setStatus('needs-code', { error: message });
+    return { ok: false, verify: describeFactor(flow.factor), message };
+  }
+}
+
+/** Send another one. Only meaningful for the mailed/texted strategies. */
+export async function resendCode() {
+  const flow = state.flow;
+  if (!flow) return { ok: false, message: 'That sign-in expired. Start again.' };
+  if (!SENT_TO_YOU.has(flow.factor.strategy)) {
+    return { ok: false, message: 'That code comes from your authenticator, not from us.' };
+  }
+  try {
+    await sendCode(flow.res, flow.stage, flow.factor);
+    return { ok: true, message: 'Another code is on its way.' };
+  } catch (err) {
+    return { ok: false, message: describe(err) };
+  }
+}
+
+/** Abandon a half-finished sign-in and go back to the password box. */
+export function cancelSignIn() {
+  state.flow = null;
+  setStatus('signed-out');
 }
 
 /** Clerk's own sign-in modal. The escape hatch for MFA, OAuth and email codes. */
@@ -262,7 +393,7 @@ function describe(err) {
 
 export const backend = {
   isConfigured, connect, onChange, getStatus,
-  signIn, signOut, openHostedSignIn,
+  signIn, submitCode, resendCode, cancelSignIn, signOut, openHostedSignIn,
   query, watch, mutation,
 };
 
